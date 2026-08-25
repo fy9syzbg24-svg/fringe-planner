@@ -1,0 +1,2101 @@
+/* Fringe Planner - dense, fast, dark-first.
+ *
+ * TYPE SCALE - keep to it. The stylesheet had drifted to 18 sizes and 7
+ * weights, which is why day numbers, pills and captions looked subtly
+ * mismatched from card to card:
+ *   7 / 10 / 11 / 12.5 / 14 / 15 / 17 / 19 / 34 px
+ *   600 (medium) / 650 (semibold) / 700 (bold)
+ * If a new value seems necessary, the surrounding component is probably the
+ * thing that needs adjusting instead. */
+
+:root {
+  --bg:        #12111a;
+  --bg-2:      #1a1926;
+  --bg-3:      #232235;
+  --line:      #2f2e44;
+  --line-2:    #474463;   /* a border meant to be SEEN, not just felt */
+  --ink:       #eceaf5;
+  --ink-2:     #a7a4c0;
+  --ink-3:     #6f6c8a;
+  --accent:    #ff5c8a;   /* booked show */
+  --accent-2:  #4ad6c4;   /* free time */
+  --warn:      #ffb454;   /* filling up */
+  --hot:       #ff4d4d;   /* going fast */
+  --commit:    #7c8cff;   /* non-show commitment */
+  --today:     #6ea8ff;   /* "you are here" - never a status colour */
+  /* ⚠️ A THIRD blue, and deliberately not either of the two above. His request
+     2026-08-22 was a blue Ticket button, but --today means "you are here" and
+     --commit means "a thing that is not a show", so reusing either would break
+     the rule that a colour means one thing. This one is darker and far more
+     saturated than both, and means exactly one thing: the code at the door. */
+  --ticket:    #2f7bf6;
+  --travel:    #8a879f;
+  --radius:    12px;
+  --pad:       14px;
+  --mono:      ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans:      -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg:#f7f6fb; --bg-2:#ffffff; --bg-3:#eeecf6; --line:#dedbec; --line-2:#bdb8d6;
+    --ink:#1a1926; --ink-2:#57536e; --ink-3:#8b87a3;
+  }
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.45 var(--sans);
+  padding-bottom: calc(24px + env(safe-area-inset-bottom));
+  overscroll-behavior-y: none;
+}
+h1, h2, h3 { margin: 0; font-weight: 650; }
+button { font: inherit; color: inherit; cursor: pointer; }
+a { color: var(--accent); }
+
+.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.is-hidden { display: none !important; }
+
+/* ------------------------------------------------------------- header */
+.top {
+  position: sticky; top: 0; z-index: 30;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(12px);
+  padding: calc(10px + env(safe-area-inset-top)) var(--pad) 8px;
+  border-bottom: 1px solid var(--line);
+}
+.top-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.top h1 { font-size: 17px; letter-spacing: -0.01em; }
+.meta { margin: 3px 0 0; font-size: 11px; color: var(--ink-3); }
+.icon-btn {
+  background: var(--bg-3); border: 1px solid var(--line); border-radius: 9px;
+  width: 34px; height: 34px; display: grid; place-items: center; flex: none;
+}
+.icon-btn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+#refresh.is-busy svg { animation: spin 0.9s linear infinite; }
+#publish.is-busy svg { animation: lift 0.9s ease-in-out infinite; }
+@keyframes lift { 0%,100% { transform: translateY(1px); } 50% { transform: translateY(-2px); } }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* -------------------------------------------------------------- tabs */
+.tabs {
+  position: sticky; top: 0; z-index: 25;
+  display: flex; gap: 5px; padding: 9px var(--pad);
+  background: var(--bg); border-bottom: 1px solid var(--line);
+}
+.tab {
+  flex: 1; padding: 8px 6px; border-radius: 9px; font-size: 12.5px; font-weight: 600;
+  background: transparent; border: 1px solid transparent; color: var(--ink-2);
+  white-space: nowrap;
+}
+.tab.is-on { background: var(--bg-3); border-color: var(--line); color: var(--ink); }
+
+.view { padding: 0 var(--pad); }
+
+/* ---------------------------------------------------------- day strip */
+.daystrip {
+  display: flex; gap: 7px; overflow-x: auto; padding: 12px 0 10px;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  /* ⚠️ SAFE centre, never plain `center`. His request 2026-08-17: on the Mac
+     and iPad, once all 15 days fit there is no reason for them to hug the left
+     edge. But a plain `justify-content: center` in a scrolling flex row is the
+     classic trap - when the content DOES overflow, the overflow spills off the
+     LEFT where scrollLeft cannot reach it, so the first days of the festival
+     become permanently unreachable on a phone. `safe` centres only while it
+     fits and falls back to flex-start the moment it does not. A browser too
+     old to know the keyword drops the whole declaration and keeps today's
+     left-aligned behaviour, which is the right fallback. */
+  justify-content: safe center;
+}
+.daystrip::-webkit-scrollbar { display: none; }
+.daycard {
+  flex: none; width: 60px; padding: 8px 6px; border-radius: var(--radius);
+  background: var(--bg-2); border: 1px solid var(--line); text-align: center;
+}
+.daycard.is-on { border-color: var(--accent); background: var(--bg-3); }
+.daycard .wd { font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.05em; }
+.daycard .dn { font-size: 19px; font-weight: 700; line-height: 1.15; }
+.daycard .dots { display: flex; gap: 2.5px; justify-content: center; height: 6px; margin-top: 3px; }
+.daycard .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+.daycard .dot.commit { background: var(--commit); }
+.daycard .free { font-size: 10px; color: var(--accent-2); margin-top: 2px; }
+
+/* ----------------------------------------------------------- timeline */
+.dayhead { display: flex; align-items: baseline; justify-content: space-between; margin: 4px 0 10px; gap: 10px; }
+.dayhead h2 { font-size: 15px; }
+.dayhead .sub { font-size: 12.5px; color: var(--ink-3); }
+
+.allday { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.pill {
+  font-size: 11px; padding: 3px 9px; border-radius: 999px;
+  background: var(--bg-3); border: 1px solid var(--line); color: var(--ink-2);
+}
+.pill.medical { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); color: var(--warn); }
+.pill.deadline { border-color: color-mix(in srgb, var(--commit) 45%, var(--line)); color: var(--commit); }
+.pill.travel { border-color: var(--line); color: var(--travel); }
+.pill.show { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); color: var(--accent); }
+.pill.commitment { border-color: color-mix(in srgb, var(--commit) 45%, var(--line)); color: var(--commit); }
+
+.timeline { position: relative; margin: 0 0 22px; padding-left: 42px; }
+.tl-hour { position: absolute; left: 0; width: 100%; border-top: 1px solid var(--line); }
+.tl-hour span {
+  position: absolute; left: 0; top: -7px; width: 36px; text-align: right;
+  font-size: 11px; color: var(--ink-3); font-family: var(--mono);
+}
+.tl-item {
+  position: absolute; left: 42px; right: 0; border-radius: 9px; padding: 5px 9px;
+  overflow: hidden; border: 1px solid transparent; text-align: left; width: auto;
+  display: block; background: var(--bg-3);
+}
+.tl-item .t { font-size: 12.5px; font-weight: 650; line-height: 1.25; }
+.tl-item .w { font-size: 11px; color: var(--ink-2); margin-top: 1px; }
+.tl-item.show    { --block-bg: color-mix(in srgb, var(--accent) 20%, var(--bg-2)); background: var(--block-bg); border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.tl-item.commitment { --block-bg: color-mix(in srgb, var(--commit) 18%, var(--bg-2)); background: var(--block-bg); border-color: color-mix(in srgb, var(--commit) 50%, transparent); }
+.tl-item.travel  { --block-bg: var(--bg-2); background: var(--block-bg); border-color: var(--line); color: var(--ink-2); }
+/* Earmarked on EdFringe but no ticket held - dashed to read as provisional. */
+.tl-item.bookmarked {
+  background: color-mix(in srgb, var(--accent) 9%, var(--bg-2));
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  border-style: dashed;
+}
+.tl-item.bookmarked .w { color: var(--ink-3); }
+.tl-item.medical { --block-bg: color-mix(in srgb, var(--warn) 16%, var(--bg-2)); background: var(--block-bg); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+
+.tl-gap {
+  position: absolute; left: 42px; right: 0; border-radius: 9px;
+  border: 1px dashed color-mix(in srgb, var(--accent-2) 50%, var(--line));
+  background: color-mix(in srgb, var(--accent-2) 7%, transparent);
+  display: flex; align-items: center; justify-content: center; flex-direction: column;
+  gap: 1px; padding: 4px; text-align: center;
+}
+.tl-gap .g1 { font-size: 12.5px; font-weight: 650; color: var(--accent-2); font-family: var(--mono); }
+.tl-gap .g2 { font-size: 11px; color: var(--ink-3); }
+.tl-gap.tiny { flex-direction: row; gap: 6px; }
+.tl-gap.tiny .g2 { display: none; }
+
+/* ⚠️ The plannable lane beside one of his soft blocks. Same teal dashes as a
+   real gap because it is the same offer - "you can still put a show here" -
+   but fainter, because those hours are NOT free: he is working through them
+   and the block beside it is the thing that is true. Width and side are set
+   in sizeTimelineRows(), which owns every hold-lane measurement. His ask,
+   2026-08-18. */
+.tl-gap.softlane {
+  background: color-mix(in srgb, var(--accent-2) 4%, transparent);
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--accent-2) 50%, var(--line));
+}
+/* Only the piece BESIDE the block is a narrow lane; above and below it the
+   fill runs the full width of the row - "allow the green fill to wrap around
+   the events to fill the gaps", 2026-08-18. */
+/* A lane is narrow, so the chip inside must not force it wider. */
+.tl-gap.softlane .g2 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.tl-gap.softlane.tiny .g2 { display: block; }
+
+.emptyday { padding: 26px 10px; text-align: center; color: var(--ink-3); font-size: 12.5px; }
+
+/* --------------------------------------------------------------- hero */
+.hero { text-align: center; padding: 16px 8px 12px; }
+.hero .big { font-size: 34px; font-weight: 700; font-family: var(--mono); line-height: 1; color: var(--accent-2); }
+.hero .cap { font-size: 12.5px; color: var(--ink-2); margin-top: 5px; }
+
+.filters, .searchwrap { display: flex; gap: 6px; padding: 2px 0 12px; flex-wrap: wrap; }
+.chip {
+  font-size: 12.5px; padding: 6px 11px; border-radius: 999px;
+  background: var(--bg-2); border: 1px solid var(--line); color: var(--ink-2);
+}
+/* ⚠️ --today (the blue on the selected day card), not --accent. Pink is the
+   "booked show" colour in this palette; a selected filter is not that, and the
+   two read as the same signal side by side. His call, 2026-08-16. */
+.chip.is-on { background: var(--bg-3); border-color: var(--today); color: var(--ink); }
+.searchwrap input {
+  width: 100%; font-size: 15px; padding: 10px 12px; border-radius: 10px;
+  background: var(--bg-2); border: 1px solid var(--line); color: var(--ink);
+}
+
+/* -------------------------------------------------------------- cards */
+.cards { display: flex; flex-direction: column; gap: 8px; padding-bottom: 20px; }
+.card {
+  display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: start;
+  background: var(--bg-2); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 10px 12px; text-align: left; width: 100%;
+}
+.card:active { background: var(--bg-3); }
+.card .ttl { font-size: 12.5px; font-weight: 650; line-height: 1.3; }
+.card .sub { font-size: 11px; color: var(--ink-2); margin-top: 2px; }
+.card .fit { font-size: 11px; color: var(--accent-2); margin-top: 4px; font-weight: 600; }
+.card .fit.none { color: var(--ink-3); font-weight: 600; }
+.card.booked { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+
+.urg { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; flex: none; width: 66px; }
+.urg .lab { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3); text-align: right; line-height: 1.2; }
+.urg .bar { width: 100%; height: 5px; border-radius: 3px; background: var(--bg-3); overflow: hidden; }
+.urg .bar i { display: block; height: 100%; background: var(--accent-2); }
+.urg.filling .bar i { background: var(--warn); }
+.urg.filling .lab { color: var(--warn); }
+.urg.fast .bar i { background: var(--hot); }
+.urg.fast .lab { color: var(--hot); }
+.urg .pct { font-size: 11px; font-family: var(--mono); color: var(--ink-3); }
+
+.tag {
+  display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase; padding: 2px 6px; border-radius: 5px; margin-right: 5px;
+  background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent);
+}
+.tag.only { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
+/* A ticket he owns is green, the same sage the calendar and the owned date
+   cells already use - the accent pink read as an alert for something that is
+   settled and good news. His call, 2026-08-16. */
+.tag.booked {
+  background: color-mix(in srgb, var(--gcal-sage) 22%, transparent);
+  color: var(--gcal-sage);
+}
+
+/* -------------------------------------------------------------- sheet */
+.sheet { position: fixed; inset: 0; z-index: 60; }
+.sheet-scrim { position: absolute; inset: 0; background: rgba(0,0,0,0.55); }
+.sheet-panel {
+  position: absolute; left: 0; right: 0; bottom: 0; max-height: 88vh; overflow-y: auto;
+  background: var(--bg-2); border-top: 1px solid var(--line);
+  border-radius: 16px 16px 0 0; padding: 18px var(--pad) calc(24px + env(safe-area-inset-bottom));
+}
+.sheet-close {
+  position: absolute; top: 12px; right: 12px; width: 30px; height: 30px;
+  border-radius: 8px; background: var(--bg-3); border: 1px solid var(--line);
+  display: grid; place-items: center;
+}
+.sheet-close svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.sheet h2 { font-size: 17px; line-height: 1.25; }
+/* Reserves the close button's corner for the first two lines only - the venue
+   rows underneath keep the full width. Height is 2 lines of title plus a nudge. */
+.sheetwords .closegap { float: right; width: 46px; height: 44px; }
+.sheet .sub { font-size: 12.5px; color: var(--ink-2); margin-top: 4px; }
+/* The showtime is the thing he scans this line for, so it sits at full
+   brightness while everything around it stays secondary. His note 2026-08-16. */
+.sheet .sub .when { color: var(--ink); font-weight: 600; }
+.sheet h3 { font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); margin: 18px 0 8px; }
+
+.dategrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(58px, 1fr)); gap: 5px; }
+.dcell {
+  border-radius: 8px; padding: 6px 3px; text-align: center; font-size: 11px;
+  background: var(--bg-3); border: 1px solid var(--line); color: var(--ink-3);
+}
+.dcell .d { font-family: var(--mono); font-size: 12.5px; font-weight: 650; color: var(--ink-2); }
+.dcell.open { border-color: color-mix(in srgb, var(--accent-2) 50%, transparent); color: var(--accent-2); }
+.dcell.open .d { color: var(--accent-2); }
+.dcell.gone { opacity: 0.42; }
+.dcell.fits { background: color-mix(in srgb, var(--accent-2) 18%, var(--bg-3)); border-color: var(--accent-2); }
+/* ⚠️ Keep this faint. In the POPUP he wants past and off-trip dates out of the
+   way - "i like how the pop up calendar grid view hid past days" - and it is the
+   CARD's mini calendar that carries the sell-out history instead. The states
+   underneath are still truthful (see app.js); they are simply not shouted. */
+.dcell.offtrip { opacity: 0.3; }
+
+.btn-row { display: flex; gap: 8px; margin-top: 18px; }
+.btn {
+  flex: 1; text-align: center; padding: 11px; border-radius: 10px; font-size: 14px;
+  font-weight: 650; text-decoration: none; background: var(--accent); color: #fff; border: none;
+}
+.btn.ghost { background: var(--bg-3); color: var(--ink); border: 1px solid var(--line); }
+/* ⚠️ "Buy tickets" is deliberately NOT --accent. That pink is documented in the
+   palette as "booked show" and is also the FAVE tag and the heart sitting right
+   beside this button - so the buy action was wearing the colour of a thing he
+   already has. Teal is his choice, 2026-08-16, and it fits: --accent-2 already
+   means "you can still get in", which is exactly what buying is.
+   Dark ink because teal cannot carry white text at this weight. */
+.btn.buy { background: var(--accent-2); color: #10121a; }
+.btn.buy:active { filter: brightness(1.12); }
+
+.note { font-size: 11px; color: var(--ink-3); margin-top: 12px; line-height: 1.5; }
+
+/* ------------------------------------------------------------ desktop */
+@media (min-width: 760px) {
+  body { max-width: 1080px; margin: 0 auto; }
+
+  /* The calendars were scaled down precisely so more shows fit on screen at
+     once - his instruction, 2026-08-14. Density is the point, so the columns
+     are fluid rather than fixed at two. */
+  .cards {
+    display: grid; gap: 9px;
+    grid-template-columns: repeat(auto-fill, minmax(318px, 1fr));
+  }
+  .timeline { padding-left: 52px; }
+  .tl-item, .tl-gap { left: 52px; }
+  /* ⚠️ Centred, not bottom-anchored. Pinning it to bottom:4vh meant a short
+     sheet sat low on the screen and a tall one climbed toward the top, so the
+     dialog appeared to move around depending on the show. */
+  .sheet-panel {
+    left: 50%; top: 50%; bottom: auto;
+    transform: translate(-50%, -50%);
+    max-width: 620px; border-radius: 16px; max-height: 86vh;
+  }
+}
+
+/* -------------------------------------------------- catalogue + activity */
+
+/* A horizontal chip row that scrolls rather than wrapping to three lines:
+   Browse has seven filters and Activity two rows of them. */
+.scrollrow {
+  flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+  -webkit-overflow-scrolling: touch; margin: 0 calc(var(--pad) * -1);
+  padding-left: var(--pad); padding-right: var(--pad);
+}
+.scrollrow::-webkit-scrollbar { display: none; }
+.scrollrow .chip { flex: none; }
+
+.sortrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-bottom: 10px; }
+.sortcount { font-size: 11px; color: var(--ink-3); }
+.sortrow select {
+  font: inherit; font-size: 12.5px; color: var(--ink); background: var(--bg-2);
+  border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px;
+}
+/* Genre filter, sitting beside the sort control. */
+.sortctl { display: flex; align-items: center; gap: 8px; }
+/* ⚠️ The panel is positioned against the SORT ROW, not the button. Anchored to
+   the button's right edge a 280px panel began at negative x on a 393px phone and
+   its left column was cut off. His report, 2026-08-16. */
+.gpick { position: static; }
+.gpickbtn {
+  font: inherit; font-size: 12.5px; color: var(--ink); background: var(--bg-2);
+  border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px;
+  cursor: pointer; max-width: 46vw; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Same "you are here" blue as the chips - an active filter is a selection,
+   not the booked-show pink. */
+.gpickbtn.is-on { border-color: var(--today); }
+/* Right-anchored so a long list never pushes the page sideways, and capped to
+   the viewport so the whole thing scrolls on a phone instead of running off
+   the bottom. */
+.gpickpanel {
+  /* ⚠️ Centred on the SCREEN, like the iOS menu he pointed at - not hung off
+     the button. Anchored, a tall list either ran off the left edge or off the
+     bottom of a phone; centred it always fits and always lands in the same
+     place. His call 2026-08-16. */
+  /* ⚠️ Sits BELOW the tab bar, not dead-centre: centred vertically it covered
+     Calendar/Book/Browse/Changed, so he could not see which page he was
+     filtering. His note, 2026-08-16. */
+  position: fixed; left: 50%; top: 152px; transform: translateX(-50%);
+  z-index: 70;
+  width: 320px; max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 176px);
+  overflow: hidden;                 /* the CARD clips; the inner list scrolls */
+  display: flex; flex-direction: column;
+  /* ⚠️ iOS menu vibrancy, his reference: translucent dark grey over a heavy
+     blur rather than a solid slab, so the page reads through it. Matches the
+     maps chooser, so the app has one overlay language rather than two. */
+  border-radius: 14px;
+  /* ⚠️ NO backdrop-filter here, and raising the opacity did not save it. WebKit
+     sizes a backdrop-filter's composited layer to the VISIBLE region, so once
+     the list is scrolled the rows past that region paint with no background at
+     all - the card appears to end mid-list. Reported twice, 2026-08-16. A plain
+     background paints the full scroll height; the scrim behind still gives the
+     depth the blur was there for. */
+  background: var(--bg-2);
+  /* ⚠️ Tokens, not #fff/black. A white border on a white card is invisible in
+     light mode, and a .6 black shadow is a smudge there. His report, 2026-08-16. */
+  border: 1px solid var(--line);
+  box-shadow: 0 26px 64px rgba(0, 0, 0, .35);
+  /* Without this, flicking past the end of the list on iOS hands the scroll to
+     the page underneath - which then closes the panel out from under him. */
+  padding: 0;
+}
+/* ⚠️ The scrolling half. The background lives on the CARD above, so it paints
+   once and cannot split - putting it on the scroller is what made the panel
+   appear to end mid-list on iOS. */
+.gpickscroll {
+  overflow-y: auto; -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;     /* a flick past the end must not scroll the page */
+  padding: 8px; min-height: 0;
+}
+.gpickpanel.is-hidden { display: none; }
+/* The page behind an open list is inert - it cannot scroll and cannot be
+   tapped through. The panel itself stays fully interactive. */
+html.modal-open, html.modal-open body { overflow: hidden; touch-action: none; }
+/* Its own scrim, so the list reads as a layer over the page rather than a card
+   floating on top of it. No extra element needed. */
+/* ⚠️ The scrim is NOT a child of the panel. As .gpickpanel::before with
+   z-index:-1 it painted INSIDE the panel's stacking context - and a negative
+   z-index child paints after the element's own background but before its text,
+   so the black wash sat on top of the white card and under the labels. Invisible
+   on dark, obvious on light: the card came out grey with washed-out headings.
+   His report, 2026-08-16.
+   Hung off the modal-open state instead, so it sits under the panel (z 70) and
+   over the page. */
+html.modal-open body::before {
+  content: ""; position: fixed; inset: 0; z-index: 60;
+  background: rgba(0, 0, 0, .38);
+}
+.gpickhead {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 2px 4px 8px;
+}
+.gpickhead b { font-size: 13px; color: var(--ink-3); font-weight: 600; }
+.gpickclear {
+  font: inherit; font-size: 14px; color: var(--accent-2); background: none;
+  border: 0; padding: 2px 4px; cursor: pointer;
+}
+.gpicksec {
+  font-size: 11px; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--ink-3); padding: 12px 6px 5px;
+}
+/* ⚠️ Sized against iOS's own <select> menu, which he pointed at as the
+   reference: 15.5px text on a 40px row. The old 13px/6px rows were noticeably
+   tighter than every native menu next to them, and harder to hit. */
+.gpickrow {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  font: inherit; font-size: 15.5px; color: var(--ink); text-align: left;
+  background: none; border: 0; border-radius: 8px; padding: 10px 6px;
+  cursor: pointer;
+}
+/* --bg-3 is the app's "raised surface" in both themes, so these read either way. */
+.gpickrow:hover { background: var(--bg-3); }
+.gpickrow:active { background: color-mix(in srgb, var(--today) 18%, var(--bg-3)); }
+.gpickbox {
+  width: 18px; height: 18px; flex: none; border-radius: 5px;
+  border: 1px solid var(--line); position: relative;
+}
+/* Teal, matching the banner and the Buy button - pink means "booked" in this
+   palette, which a filter checkbox is not. Dark tick: white on teal is too low
+   a contrast at this size. */
+.gpickrow.is-on .gpickbox { background: var(--accent-2); border-color: var(--accent-2); }
+.gpickrow.is-on .gpickbox::after {
+  content: ""; position: absolute; left: 5px; top: 2px; width: 5px; height: 9px;
+  border: solid #10121a; border-width: 0 2.5px 2.5px 0; transform: rotate(45deg);
+}
+.gpickn { margin-left: auto; font-size: 12.5px; color: var(--ink-3); }
+
+/* The glance time under a card's month grid. Deliberately the largest thing on
+   the card after the title: it answers "what time is this on" without opening
+   anything. His request 2026-08-16, alongside the sub line, not instead of it. */
+/* ⚠️ Sized to the CALENDAR COLUMN, which is about 120px. At 15px "1:55 PM +1"
+   wrapped onto two lines and added a whole row of height to every card, which
+   is the opposite of glanceable. Stacked, nowrap, and only a step larger than
+   the card text - still the boldest thing in that column. */
+.calmtime {
+  display: flex; flex-direction: column; align-items: center; gap: 0;
+  margin-top: 4px; padding-top: 3px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+.calmtime b {
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  font-size: 13px; font-weight: 700; letter-spacing: -0.03em; color: var(--ink);
+  white-space: nowrap; line-height: 1.25;
+}
+.calmtime i {
+  font-style: normal; font-size: 8.5px; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--ink-3); line-height: 1.3;
+  white-space: nowrap;
+}
+.calmtime.istoday b { color: var(--accent-2); }
+.calmtime.istoday i { color: var(--accent-2); opacity: 0.85; }
+
+/* The sitting picker, shown under the availability grid when a day has more
+   than one showtime. Under, not over: a popover on a phone covers the dates. */
+.timepick {
+  margin-top: 8px; padding: 9px 10px; border-radius: 10px;
+  background: var(--bg-2); border: 1px solid var(--line);
+}
+.timepick.is-hidden { display: none; }
+.tphead { font-size: 12px; font-weight: 650; color: var(--ink-2); margin-bottom: 7px; }
+.tprow { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip.tpchip { font-family: var(--mono); font-size: 12px; }
+/* The same red/teal the date squares use, so a sold-out sitting reads the same
+   way in both places. His request 2026-08-16. */
+.chip.tpchip.tpopen {
+  border-color: color-mix(in srgb, var(--accent-2) 50%, transparent);
+  color: var(--accent-2);
+}
+.chip.tpchip.tpgone {
+  border-color: color-mix(in srgb, var(--hot) 45%, var(--line));
+  color: var(--hot); opacity: 0.75;
+}
+.chip.tpchip.is-on {
+  background: color-mix(in srgb, var(--gcal-banana) 22%, var(--bg-3));
+  border-color: var(--gcal-banana); color: var(--gcal-banana);
+}
+.tpnote { font-size: 10.5px; color: var(--ink-3); margin-top: 7px; line-height: 1.4; }
+
+/* Navigate-to-venue: an icon, no word (his request 2026-08-16). Sized to sit on
+   the venue line without pushing it around, and given a real tap target on a
+   phone rather than the 14px the glyph alone would offer. */
+/* ⚠️ Both controls are 28px tall and share a border box, so the pair lines up
+   exactly rather than nearly - the chip was content-sized and came out shorter.
+   His note, 2026-08-16. */
+.navbtn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; box-sizing: border-box;
+  margin-left: 6px; vertical-align: -8px;
+  border-radius: 8px; border: 1px solid var(--line); background: var(--bg-3);
+  color: var(--accent-2); text-decoration: none; flex: none;
+}
+.navbtn svg { width: 13px; height: 13px; fill: currentColor; }
+/* Venues on their own rows under the meta line: this is what he walks to, and
+   inline they orphaned the icon and spilled the text over four lines. */
+.places { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.placerow {
+  display: flex; align-items: center; gap: 2px;
+  font-size: 12.5px; color: var(--ink-2); line-height: 1.3;
+}
+.placerow .placename { flex: 1; min-width: 0; }
+/* Roughly how far, in the smallest thing that still reads: a walking figure and
+   "15m". Only rendered when his location and the venue's are both known. */
+.walkchip {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  flex: none; height: 28px; box-sizing: border-box;
+  margin-left: 6px; padding: 0 10px 0 8px; border-radius: 999px;
+  background: var(--bg-3); border: 1px solid var(--line); color: var(--ink-2);
+  text-decoration: none; cursor: pointer;
+}
+.walkchip:active { filter: brightness(1.3); }
+
+/* Location refused: a quiet amber pin in the banner, tappable to ask again.
+   Deliberately not a dialog - it is a degraded feature, not a failure. */
+/* ⚠️ .top .icon-btn later in the file has equal specificity and was winning,
+   so the warning rendered identical to the refresh button - the whole point of
+   it is that it looks different. Found by audit, 2026-08-16. */
+.top .icon-btn.locwarn, .icon-btn.locwarn {
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--line));
+  color: var(--warn);
+}
+.icon-btn.locwarn svg {
+  fill: none; stroke: currentColor; stroke-width: 1.9;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.icon-btn.locwarn[hidden] { display: none; }
+
+/* Confirmation after a refresh, gone in a few seconds. */
+/* A small green tick in the left slot, nothing more - a text pill here
+   overlapped the wordmark and said what he already knew. His call 2026-08-16. */
+.locok {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; box-sizing: border-box; border-radius: 999px;
+  background: color-mix(in srgb, var(--gcal-sage) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--gcal-sage) 60%, transparent);
+  color: var(--gcal-sage);
+  animation: locfade .2s ease-out;
+}
+.locok.warn {
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 55%, transparent);
+  color: var(--warn);
+}
+.locok[hidden] { display: none; }
+.locok svg { width: 14px; height: 14px; fill: none; stroke: currentColor;
+             stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+@keyframes locfade { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; } }
+.walkchip svg { width: 11px; height: 11px; color: var(--accent-2); }
+.walkchip b {
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  font-size: 10.5px; font-weight: 700; letter-spacing: -.02em;
+}
+
+/* ⚠️ The maps chooser, shaped like the one EdFringe's own app uses for this
+   exact decision. The old version was a 148px dropdown hanging off a 26px icon,
+   which on a phone read as a glitch rather than a choice. Above everything
+   (z-index beats the sheet's 60), centred, targets big enough to hit walking
+   down a street. */
+.mapsback {
+  position: fixed; inset: 0; z-index: 90;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px; background: rgba(0, 0, 0, .42);
+  -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+  animation: mapsfade .14s ease-out;
+}
+@keyframes mapsfade { from { opacity: 0; } to { opacity: 1; } }
+/* ⚠️ Translucent, like the sheet EdFringe's own app puts up - you can see the
+   show behind it, so it reads as a layer over your place rather than a slab
+   that replaced it. The blur is what keeps the text legible over whatever
+   happens to be underneath; without it, translucency alone turns the labels to
+   mush over a poster. His note, 2026-08-16. */
+.mapscard {
+  width: 100%; max-width: 320px; border-radius: 18px; padding: 18px 16px 14px;
+  background: color-mix(in srgb, var(--bg-2) 50%, transparent);
+  -webkit-backdrop-filter: blur(22px) saturate(1.5);
+  backdrop-filter: blur(22px) saturate(1.5);
+  border: 1px solid var(--line);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .35);
+}
+/* The options need a touch more solidity than the card, or they vanish into
+   whatever is showing through it. */
+.mapscard .mapsopt { background: color-mix(in srgb, var(--bg-3) 82%, transparent); }
+/* Section label, not a headline - same voice as AVAILABILITY on the sheet. */
+.mapstitle {
+  text-align: center; font-size: 10.5px; font-weight: 700;
+  letter-spacing: .09em; text-transform: uppercase; color: var(--ink-3);
+}
+/* The venue is what he is actually choosing, so it carries the weight. */
+.mapsvenue {
+  text-align: center; font-size: 15px; font-weight: 650; color: var(--ink);
+  padding: 5px 4px 14px; line-height: 1.3;
+}
+/* ⚠️ Options sit LIGHTER than the card. The first pass made them darker with a
+   border on each, so they read as holes punched in the panel rather than as
+   things to press, and three identical boxes gave Cancel the same weight as the
+   two real actions. */
+.mapsopt {
+  display: flex; align-items: center; gap: 10px;
+  padding: 13px 14px; margin-top: 8px; border-radius: 12px;
+  font: inherit; font-size: 15px; font-weight: 600;
+  background: var(--bg-3); color: var(--ink); border: 0;
+  text-decoration: none; cursor: pointer; width: 100%; text-align: left;
+}
+.mapsopt svg { width: 14px; height: 14px; fill: var(--accent-2); flex: none; }
+.mapsopt:active { background: color-mix(in srgb, var(--accent-2) 18%, var(--bg-3)); }
+/* Cancel is not an action of the same kind: no fill, no icon, quieter. */
+.mapsopt.cancel {
+  background: none; color: var(--ink); opacity: .85; font-weight: 600;
+  font-size: 14px; justify-content: center; margin-top: 6px; padding: 12px;
+}
+.mapsopt.cancel:active { background: none; opacity: 1; }
+
+/* ⚠️ Desktop anchors the panel to its button; only the phone centres it. On a
+   1280px window a centred sheet floats in the middle of the page for no reason -
+   there is plenty of room beside the button, and the scrim is overkill. The
+   phone keeps the centred treatment because an anchored panel either runs off
+   the left edge or off the bottom there. His call, 2026-08-16. */
+@media (min-width: 760px) {
+  .sortrow { position: relative; }
+  .gpickpanel {
+    position: absolute; left: auto; right: 0; top: calc(100% + 6px);
+    transform: none; width: 320px; max-height: 66vh;
+  }
+  /* ⚠️ The scrim moved to body::before when it was taken out of the panel's
+     stacking context; this rule still named the old pseudo-element, which no
+     longer generates a box - so desktop kept a full-page wash. Invisible on
+     dark, a hard slate over light. Found by audit, 2026-08-16. */
+  html.modal-open body::before { display: none; }
+}
+
+.morewrap { display: flex; justify-content: center; padding: 4px 0 24px; }
+
+.catmain { display: flex; gap: 10px; align-items: flex-start; }
+.catbody { flex: 1; min-width: 0; }
+/* Posters are hotlinked from EdFringe and lazy-loaded; a fixed box means the
+   list never reflows as they arrive. Sized to stand as tall as the month
+   calendar opposite it, so a row reads as one block rather than three
+   mismatched heights. */
+.poster {
+  width: 54px; height: 72px; object-fit: cover; border-radius: 6px;
+  background: var(--bg-3); flex: none;
+}
+.card.fav { align-items: flex-start; }
+.card.fav .poster { margin-right: 2px; }
+
+.state { display: flex; align-items: center; gap: 6px; margin-top: 5px; flex-wrap: wrap; }
+.pill2 {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase;
+  padding: 2px 6px; border-radius: 5px; background: var(--bg-3); color: var(--ink-2);
+}
+.pill2.open    { background: color-mix(in srgb, var(--accent-2) 20%, transparent); color: var(--accent-2); }
+.pill2.filling { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+.pill2.fast    { background: color-mix(in srgb, var(--hot) 20%, transparent); color: var(--hot); }
+.pill2.gone    { background: var(--hot); color: #fff; }
+.pill2.fit     { background: color-mix(in srgb, var(--commit) 22%, transparent); color: var(--commit); }
+.pill2.none    { color: var(--ink-3); }
+.state .dates { font-size: 11px; font-family: var(--mono); color: var(--ink-3); }
+
+.legend { font-size: 11px; color: var(--ink-3); margin-top: 8px; }
+
+.card.act { align-items: flex-start; }
+.card.act .when { font-size: 11px; color: var(--ink-3); margin-top: 4px; }
+.tag.fav  { background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent); }
+.tag.back { background: var(--accent-2); color: #10121a; }
+.tag.fast { background: color-mix(in srgb, var(--hot) 24%, transparent); color: var(--hot); }
+.tag.gone { background: var(--hot); color: #fff; }
+.tag.new  { background: color-mix(in srgb, var(--commit) 24%, transparent); color: var(--commit); }
+
+/* ⚠️ .card is a two-column grid (detail | urgency). Anything appended after
+   those two lands in the next implicit cell, which is how the calendar strip
+   ended up half-width beside the text instead of under it. */
+.favmain { display: flex; gap: 10px; align-items: flex-start; min-width: 0; }
+.favtext { min-width: 0; }
+
+/* Phone: the strip has 15 days in ~343px, so the cells go numberless and read
+   as a bar of colour. Tapping still opens the readable version. */
+@media (max-width: 430px) {
+  .poster { width: 72px; height: 96px; }
+}
+
+/* --------------------------------------------------------- month calendar */
+/* His preferred shape (2026-08-14, from the Fringe Watch screenshot): a real
+   August grid rather than a 15-day rail. Red circle = no Fringe allocation,
+   teal = tickets, plain number = not playing, ring = today. Tap to enlarge. */
+/* Sized so the whole month fits inside the height of the show details
+   beside it - his instruction, 2026-08-14. Tap for the readable version. */
+.calm {
+  border: 1px solid var(--line); border-radius: 10px; padding: 5px 7px 6px;
+  background: var(--bg); min-width: 0;
+}
+.calm-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.calm-head .m { font-size: 10px; font-weight: 700; letter-spacing: -0.01em; }
+.calm-head .n { font-size: 10px; color: var(--ink-3); white-space: nowrap; }
+.calm-grid {
+  display: grid; grid-template-columns: repeat(7, 1fr);
+  gap: 1.5px; margin-top: 3px; place-items: center;
+}
+.calm-grid i {
+  font-style: normal; font-family: var(--mono); font-size: 7px;
+  font-weight: 650; font-variant-numeric: tabular-nums; line-height: 1;
+  width: 100%; aspect-ratio: 1; max-width: 13px;
+  display: grid; place-items: center; border-radius: 50%;
+  color: var(--ink-2);
+}
+.calm-grid .wd { color: var(--ink-3); font-size: 7px; font-family: var(--sans); font-weight: 700; }
+.calm-grid .pad { visibility: hidden; }
+.calm-grid i.dd { font-size: 7px; font-weight: 650; }
+.calm.big .calm-grid i.dd { font-size: 12px; }
+.calm-grid .none { color: var(--ink-3); background: color-mix(in srgb, var(--ink-3) 10%, transparent); }
+.calm-grid .cxl  { color: var(--ink-3); text-decoration: line-through; }
+/* ⚠️ Every day cell is the same size and weight - only the COLOUR changes.
+   Bolding the filled days made them read as physically bigger than the
+   non-playing ones, which is what made the grid look ragged. */
+.calm-grid .open { background: var(--accent-2); color: #10121a; }
+.calm-grid .gone { background: var(--hot); color: #fff; }
+/* Today is a ring, never a fill - it has to be readable on top of whatever
+   availability that day already shows. */
+.calm-grid .today { box-shadow: 0 0 0 2px var(--warn); }
+/* "Fits a gap in your day" is ours, not EdFringe's, so it is a marker under
+   the number rather than another ring competing with today. */
+/* ⚠️ Named `gapfit`, not `fit`: `.card .fit` is the green "Fits 3 gaps" line
+   and the calendar sits inside .card, so a cell called `fit` inherited that
+   rule's font-size and weight. Keep component class names distinct. */
+.calm-grid i.gapfit { position: relative; }
+.calm-grid i.gapfit::after {
+  content: ""; position: absolute; bottom: 1px; left: 50%; transform: translateX(-50%);
+  width: 3px; height: 3px; border-radius: 50%; background: var(--commit);
+}
+.calm.big { padding: 10px 12px 12px; }
+.calm.big .calm-head .m { font-size: 14px; }
+.calm.big .calm-head .n { font-size: 11px; }
+.calm.big .calm-grid { gap: 4px; margin-top: 8px; }
+.calm.big .calm-grid i { font-size: 12.5px; max-width: 34px; }
+.calm.big .calm-grid .wd { font-size: 10px; }
+
+/* In a list row the calendar sits to the right of the details, as it did in
+   the app he liked; on a phone it goes full width underneath. */
+.card.cat, .card.fav { grid-template-columns: 1fr 116px; }
+
+.card.fav .calm, .card.cat .calm { grid-column: 2; grid-row: 1 / span 3; }
+/* (Superseded below: the calendar stays on the right on a phone too.) */
+
+/* ------------------------------------------------- labels and explainers */
+/* Full wording on desktop, his short label on a phone segment - a tab that
+   truncates mid-word is worse than a shorter name. */
+.tab .short { display: none; }
+@media (max-width: 480px) {
+  .tab .full { display: none; }
+  .tab .short { display: inline; }
+}
+
+.explain {
+  font-size: 12.5px; color: var(--ink-2); line-height: 1.5;
+  background: var(--bg-2); border: 1px solid var(--line);
+  border-radius: 10px; padding: 9px 11px; margin: 12px 0 10px;
+}
+.explain b { color: var(--ink); font-weight: 650; }
+.actsum { font-size: 12.5px; color: var(--accent-2); font-weight: 600; margin-bottom: 10px; }
+/* The two chip rows filter different things; unlabelled they read as one
+   confusing list of nine options. */
+.rowlab {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--ink-3); margin: 2px 0 5px; font-weight: 700;
+}
+.hero .cap2 { font-size: 11px; color: var(--ink-3); margin-top: 6px; line-height: 1.5; }
+
+/* ------------------------------------------------------------------ key */
+/* What every colour on the day timeline means. Sits under the day rather
+   than above it: it is reference, not the content. */
+.keyrow {
+  display: flex; flex-wrap: wrap; gap: 6px 14px;
+  padding: 12px 2px 26px; border-top: 1px solid var(--line); margin-top: 4px;
+}
+.k { font-size: 11px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; }
+.k::before {
+  content: ""; width: 15px; height: 11px; border-radius: 3px; flex: none;
+  background: var(--bg-3); border: 1px solid var(--line);
+}
+.k.show::before       { background: color-mix(in srgb, var(--accent) 20%, var(--bg-2)); border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.k.bookmarked::before { background: color-mix(in srgb, var(--accent) 9%, var(--bg-2)); border-color: color-mix(in srgb, var(--accent) 45%, transparent); border-style: dashed; }
+.k.commitment::before { background: color-mix(in srgb, var(--commit) 18%, var(--bg-2)); border-color: color-mix(in srgb, var(--commit) 50%, transparent); }
+.k.medical::before    { background: color-mix(in srgb, var(--warn) 16%, var(--bg-2)); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.k.travel::before     { background: var(--bg-2); border-color: var(--line); }
+.k.gapk::before       { background: color-mix(in srgb, var(--accent-2) 7%, transparent); border: 1px dashed color-mix(in srgb, var(--accent-2) 50%, var(--line)); }
+
+/* ------------------------------------------------------- all-day banners */
+/* An all-day item has no position on a timeline, and neither does a 01:10
+   flight when the grid starts at 09:00 - so both used to sit in a small pill
+   that is easy to scroll past. They now span the full width at the top of the
+   day: these are the things that ruin a plan if missed. */
+.allday { display: block; margin: 0 0 12px; }
+.banner {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  width: 100%; padding: 8px 11px; border-radius: 9px; margin-bottom: 6px;
+  background: var(--bg-3); border: 1px solid var(--line);
+  border-left: 3px solid var(--ink-3);
+}
+.banner .bt { font-size: 12.5px; font-weight: 650; line-height: 1.3; }
+.banner .bw { font-size: 11px; color: var(--ink-3); font-family: var(--mono); white-space: nowrap; }
+.banner.medical    { border-left-color: var(--warn);     background: color-mix(in srgb, var(--warn) 12%, var(--bg-2)); }
+.banner.deadline   { border-left-color: var(--commit);   background: color-mix(in srgb, var(--commit) 12%, var(--bg-2)); }
+.banner.travel     { border-left-color: var(--travel);   background: var(--bg-2); }
+.banner.show       { border-left-color: var(--accent);   background: color-mix(in srgb, var(--accent) 12%, var(--bg-2)); }
+.banner.commitment { border-left-color: var(--commit);   background: color-mix(in srgb, var(--commit) 12%, var(--bg-2)); }
+.banner.bookmarked { border-left-color: var(--accent);   background: color-mix(in srgb, var(--accent) 7%, var(--bg-2)); border-left-style: dashed; }
+
+
+/* -------------------------------------------------------------- masthead */
+/* The name is the centrepiece: his own Fringe wordmark, white on the deep
+   ocean blue from the app icon, with the icon's amber ticket colour as a hair
+   line underneath. Deliberately the same band in both themes - it is the
+   brand, and it should not change character when the OS flips to light. */
+.top {
+  background:
+    radial-gradient(120% 140% at 78% -30%, #1b7ba8 0%, transparent 60%),
+    linear-gradient(165deg, #12608a 0%, #0f4c6b 55%, #0a3550 100%);
+  background-color: #0f4c6b;
+  border-bottom: none;
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--gcal-banana) 85%, transparent);
+}
+.top-row {
+  display: grid; grid-template-columns: 34px 1fr 34px; align-items: center;
+}
+.top-row .icon-btn { grid-column: auto; }
+.top-row .topbtns { grid-column: 3; justify-self: end; }
+.top-row .topleft { grid-column: 1; justify-self: start; position: relative; }
+.brand {
+  grid-column: 2; justify-content: center; align-items: center; gap: 9px;
+}
+.wordmark {
+  height: 23px;
+  filter: invert(1) drop-shadow(0 1px 6px rgba(0, 0, 0, 0.35));
+}
+.brand span {
+  font-size: 11px; font-weight: 700; letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--gcal-banana) 90%, #fff);
+}
+.top .meta { text-align: center; color: rgba(255, 255, 255, 0.66); }
+.top .icon-btn {
+  background: rgba(255, 255, 255, 0.16); border-color: rgba(255, 255, 255, 0.28);
+  color: #fff;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .wordmark { filter: invert(1) drop-shadow(0 1px 6px rgba(0,0,0,0.35)); }
+}
+@media (max-width: 480px) {
+  .wordmark { height: 20px; }
+  .brand span { font-size: 10px; letter-spacing: 0.18em; }
+}
+
+/* ⚠️ Must stay at the END of this file. The 760px block caps the page at
+   1080px, and CSS resolves equal-specificity rules by order - putting this
+   above it meant the cap won and the extra columns had nowhere to go. */
+@media (min-width: 1180px) {
+  body { max-width: 1700px; }
+}
+
+/* ------------------------------------------------- compact card geometry */
+/* Three columns: poster (with its gap pill tucked underneath), the details,
+   and the month. Putting the pill under the poster and collapsing the status
+   into a single row took two lines of height off every card, which is what
+   pays for the bigger posters. */
+.card.cat, .card.fav, .card.act { grid-template-columns: auto 1fr 116px; align-items: start; }
+.card.cat .calm, .card.fav .calm { grid-column: 3; }
+.postercol { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 62px; }
+.postercol .poster { width: 62px; height: 83px; }
+.postercol .pill2 { width: 100%; text-align: center; padding: 2px 3px; }
+.catbody { min-width: 0; }
+.state { margin-top: 4px; }
+/* The urgency bar, inline with its label instead of a stacked block. */
+.minibar { width: 34px; height: 4px; border-radius: 3px; background: var(--bg-3); overflow: hidden; display: inline-block; }
+.minibar i { display: block; height: 100%; background: var(--accent-2); }
+.minibar.filling i { background: var(--warn); }
+.minibar.fast i { background: var(--hot); }
+
+/* ⚠️ On a phone the calendar used to drop to a full-width row ABOVE the
+   poster, so every row led with a grid instead of artwork and the card was
+   twice as tall. It stays on the right, scaled down to fit: 54px poster, a
+   96px calendar with 9px cells, and the details squeezed between them. */
+@media (max-width: 560px) {
+  .card.cat, .card.fav, .card.act {
+    grid-template-columns: auto minmax(0, 1fr) 96px;
+    gap: 7px; padding: 7px 8px;
+  }
+  .card.cat .calm, .card.fav .calm, .card.act .calm {
+    grid-column: 3; grid-row: 1; width: 96px; padding: 4px 4px 5px;
+  }
+  .postercol, .postercol .poster { width: 54px; }
+  .postercol .poster { height: 72px; }
+  .postercol .pill2 { font-size: 8.5px; padding: 1px 2px; }
+  .card.cat .calm-head .m, .card.fav .calm-head .m, .card.act .calm-head .m { font-size: 9.5px; }
+  .card.cat .calm-head .n, .card.fav .calm-head .n, .card.act .calm-head .n { font-size: 8px; }
+  .card.cat .calm-grid, .card.fav .calm-grid, .card.act .calm-grid { gap: 1px; }
+  .card.cat .calm-grid i, .card.fav .calm-grid i, .card.act .calm-grid i {
+    font-size: 6px; max-width: 10px;
+  }
+  .card.cat .calm-grid .wd, .card.fav .calm-grid .wd, .card.act .calm-grid .wd { font-size: 6px; }
+  .card.cat .ttl, .card.fav .ttl, .card.act .ttl { font-size: 11.5px; }
+  .card.cat .sub, .card.fav .sub, .card.act .sub { font-size: 10.5px; }
+  .card.cat .pill2, .card.fav .pill2, .card.act .pill2 { font-size: 9px; }
+}
+
+/* At three columns the details column is ~110px, so a long title wrapped to
+   five lines and made the card taller than the pill move saved. Two lines,
+   then ellipsis - the full title is on the show sheet a tap away. */
+/* ⚠️ The CLAMP belongs to the title, not to the row that also holds the tags.
+   With it on the row, two tags ("ONLY CHANCE" + "TICKETS BACK") filled both
+   lines and Phil Ellis's name rendered as "Ph…". Now the tags wrap freely above
+   and the title always gets its own two lines. His report, 2026-08-16. */
+.card.cat .ttl, .card.fav .ttl, .card.act .ttl { display: block; overflow: visible; }
+.card.cat .ttltext, .card.fav .ttltext, .card.act .ttltext {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.card.cat .sub, .card.fav .sub {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* Keep the status on one line: label, bar and ratio belong together. */
+.state { flex-wrap: nowrap; gap: 5px; }
+.state .dates { white-space: nowrap; font-size: 10px; }
+.state .pill2 { white-space: nowrap; }
+.card.cat .calm, .card.fav .calm { width: 100%; }
+
+/* ------------------------------------------------------ relative day label */
+/* "Monday 17 August" does not say how soon that is. This fills the dead space
+   in the middle of the day header, which is exactly where the eye lands. */
+.dayhead { align-items: center; }
+.rel {
+  flex: 1; text-align: center;
+  font-size: 15px; font-weight: 700; letter-spacing: 0.06em;
+  color: var(--ink-3);
+}
+.rel.now  { color: var(--accent-2); }
+.rel.soon { color: var(--warn); }
+.rel.past { color: var(--ink-3); opacity: 0.55; }
+@media (max-width: 560px) {
+  .rel { font-size: 12.5px; letter-spacing: 0.04em; }
+}
+
+/* ------------------------------------------------------ turnaround warning */
+/* A short turnaround is a warning, not a footnote: it sits above the day,
+   before anything else. (This file is published publicly.) */
+.warn {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 11px; border-radius: 9px; margin-bottom: 8px;
+  background: color-mix(in srgb, var(--warn) 14%, var(--bg-2));
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent);
+}
+.warn.clash { background: color-mix(in srgb, var(--hot) 14%, var(--bg-2)); border-color: color-mix(in srgb, var(--hot) 60%, transparent); }
+.warn.snug  { background: var(--bg-2); border-color: var(--line); }
+.warn .wm {
+  font-family: var(--mono); font-size: 12.5px; font-weight: 700; color: var(--warn);
+  flex: none; min-width: 46px; text-align: center;
+}
+.warn.clash .wm { color: var(--hot); }
+.warn.snug .wm  { color: var(--ink-2); }
+.warn .wb { min-width: 0; }
+.warn .w1 { font-size: 12.5px; font-weight: 650; }
+.warn .w2 { font-size: 11px; color: var(--ink-2); margin-top: 2px; }
+
+/* The relative day: more presence without more size - a pill, not a whisper. */
+.rel {
+  flex: none; padding: 3px 12px; border-radius: 999px;
+  background: var(--bg-3); border: 1px solid var(--line);
+  color: var(--ink-2); font-size: 12.5px; letter-spacing: 0.08em;
+}
+.rel.now  { background: var(--accent-2); border-color: var(--accent-2); color: #10121a; }
+.rel.soon { background: color-mix(in srgb, var(--warn) 22%, transparent); border-color: var(--warn); color: var(--warn); }
+.rel.past { opacity: 0.5; }
+.dayhead { gap: 12px; }
+.dayhead h2 { flex: none; }
+.dayhead .sub { margin-left: auto; }
+
+/* Centre it properly and put the size back. Making it a pill shrank the type
+   and `margin-left:auto` on the summary pushed it off centre - it needs to sit
+   in the middle of the header regardless of how long the date or summary are,
+   so the header is a three-column grid rather than a flex row. */
+.dayhead {
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px;
+}
+.dayhead > :first-child { justify-self: start; }
+.dayhead .sub { justify-self: end; margin-left: 0; text-align: right; }
+.rel {
+  justify-self: center;
+  font-size: 15px; font-weight: 700; letter-spacing: 0.07em;
+  padding: 4px 14px;
+}
+@media (max-width: 560px) {
+  .dayhead { grid-template-columns: 1fr auto; row-gap: 4px; }
+  .rel { grid-column: 2; }
+  .dayhead .sub { grid-column: 1 / -1; justify-self: start; text-align: left; }
+}
+
+/* The status pill carries the exact ratio, so it must never be clipped. */
+.state .pill2 { text-transform: none; letter-spacing: 0; font-family: var(--mono); }
+.state { overflow: hidden; }
+
+/* ------------------------------------------------------------------ brand */
+/* His own Fringe wordmark, supplied as artwork - not a font imitation. The
+   PNG is black with real alpha, so it inverts cleanly for the dark theme
+   instead of needing a second asset. */
+.brand { display: flex; align-items: baseline; gap: 7px; }
+.wordmark {
+  height: 19px; width: auto; display: block;
+  align-self: center;
+  filter: invert(1);                       /* dark theme: white on dark */
+}
+.brand span {
+  font-size: 15px; font-weight: 600; letter-spacing: 0.01em;
+  color: var(--ink-2);
+}
+
+/* ------------------------------------------------------- earmarked shows */
+/* A "maybe" he has pencilled in: it floats over the free time rather than
+   consuming it, carries the poster so it is recognisable at a glance, and is
+   a button because the only thing to do with it is book it. */
+.tl-hold {
+  position: absolute; right: 0; width: 46%; max-width: 260px;
+  display: flex; align-items: center; gap: 7px; padding: 4px 8px 4px 5px;
+  /* ⚠️ NOT overflow:hidden. The chip's rounded corner was clipping the ticket
+     stub in the top-right corner, so a show he owns looked like a rendering
+     fault. Nothing else here needs the chip to clip: the title does its own
+     ellipsis (.h1) and .hb has min-width:0, which is what keeps a long name
+     from pushing the row wide. His report, 2026-08-16. */
+  border-radius: 9px; text-align: left; overflow: visible;
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-2));
+  border: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.tl-hold .poster { width: 22px; height: 30px; border-radius: 4px; }
+.tl-hold .hb { min-width: 0; overflow: hidden; }
+.tl-hold .h1 {
+  font-size: 11px; font-weight: 650; line-height: 1.2;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tl-hold .h2 { font-size: 10px; color: var(--accent); margin-top: 1px; }
+.tl-hold:active { background: color-mix(in srgb, var(--accent) 18%, var(--bg-2)); }
+
+/* ------------------------------------------------ Google Calendar palette */
+/* His colour scheme for Fringe shows, from SYNC.md - the same one the
+   Edinburgh Planner calendar uses, so the app and his calendar agree:
+     Sage   purchased, ticket in hand   (his choice; Basil was harder to read)
+     Banana held in the planner, unbought
+     Tomato no Fringe allocation left
+   These are Google's own hex values, not approximations. */
+:root {
+  --gcal-sage:   #33b679;
+  --gcal-banana: #f6bf26;
+  --gcal-tomato: #d50000;
+}
+
+/* Booked shows on the timeline */
+.tl-item.show {
+  --block-bg: color-mix(in srgb, var(--gcal-sage) 22%, var(--bg-2));
+  background: var(--block-bg);
+  border-color: color-mix(in srgb, var(--gcal-sage) 65%, transparent);
+}
+.daycard .dot { background: var(--gcal-sage); }
+.k.show::before {
+  background: color-mix(in srgb, var(--gcal-sage) 22%, var(--bg-2));
+  border-color: color-mix(in srgb, var(--gcal-sage) 65%, transparent);
+}
+.pill.show, .banner.show { border-left-color: var(--gcal-sage); }
+.banner.show { background: color-mix(in srgb, var(--gcal-sage) 12%, var(--bg-2)); }
+
+/* Held in the planner, not bought */
+.tl-hold {
+  --block-bg: color-mix(in srgb, var(--gcal-banana) 16%, var(--bg-2));
+  background: var(--block-bg);
+  border-color: color-mix(in srgb, var(--gcal-banana) 70%, transparent);
+}
+.tl-hold .h2 { color: color-mix(in srgb, var(--gcal-banana) 80%, var(--ink)); }
+.tl-hold:active { background: color-mix(in srgb, var(--gcal-banana) 26%, var(--bg-2)); }
+.tl-item.bookmarked {
+  --block-bg: color-mix(in srgb, var(--gcal-banana) 10%, var(--bg-2));
+  background: var(--block-bg);
+  border-color: color-mix(in srgb, var(--gcal-banana) 60%, transparent);
+}
+.k.bookmarked::before {
+  background: color-mix(in srgb, var(--gcal-banana) 16%, var(--bg-2));
+  border-color: color-mix(in srgb, var(--gcal-banana) 70%, transparent);
+}
+
+/* No allocation left - the same red his calendar turns a sold-out show */
+.calm-grid .gone { background: var(--gcal-tomato); color: #fff; }
+.pill2.gone { background: var(--gcal-tomato); color: #fff; }
+.tag.gone   { background: var(--gcal-tomato); color: #fff; }
+.pill2.fast { background: color-mix(in srgb, var(--gcal-tomato) 18%, transparent);
+              color: var(--gcal-tomato); }
+
+/* Day-strip dots, in his Google Calendar colours. Ordered shows first, so the
+   thing he has a ticket for is never the one that gets truncated. */
+.daycard .dots { flex-wrap: wrap; align-items: center; }
+.daycard .dot.show       { background: var(--gcal-sage); }
+.daycard .dot.bookmarked { background: var(--gcal-banana); }
+.daycard .dot.commitment { background: var(--commit); }
+.daycard .dot.medical    { background: var(--warn); }
+.daycard .dot.travel     { background: var(--travel); }
+.daycard .dots .more { font-size: 8.5px; color: var(--ink-3); font-family: var(--mono); line-height: 1; }
+
+/* The day card is a glance: which day, and roughly what is on it. No free-time
+   figure (it is in the day header already) and no "+1" - dots that do not fit
+   are simply dropped, in rank order, so a booked show is always among the ones
+   that survive. */
+.daycard .free, .daycard .dots .more { display: none; }
+.daycard .dots { flex-wrap: nowrap; overflow: hidden; }
+
+/* "PLANNER" in white - the amber was too dark against the blue to read. */
+.brand span { color: #fff; opacity: 0.92; }
+/* The status line only takes space when it has something to say. */
+.top .meta:empty { display: none; }
+
+/* A performance that has already happened KEEPS ITS COLOUR - his call
+   2026-08-15: "it is helpful to me to see if all the shows last week sold out,
+   or didnt". Reading a row of red across last week is how he judges how hard to
+   chase what he has not booked yet, and this used to force every past day grey.
+   Muted rather than recoloured, so it still reads as done rather than
+   available; the ring on today marks where "now" is. */
+.calm-grid i.dd.past { opacity: 0.55; }
+
+/* --------------------------------------------------- tighter list cards */
+/* With the calendars ending on the 30th they are three rows, not four, so the
+   card can lose its slack. Padding and gaps only - the poster keeps its size
+   and the day cells keep theirs. */
+.cards { gap: 7px; }
+.card { padding: 7px 9px; }
+.calm { padding: 4px 6px 5px; }
+.calm-grid { margin-top: 2px; }
+.calm-head .m { line-height: 1.15; }
+.card.cat .state, .card.fav .state { margin-top: 3px; }
+.card.cat .ttl, .card.fav .ttl { line-height: 1.25; }
+
+/* ⚠️ The gap pill belongs UNDER the poster, never on it: overlaying it put a
+   translucent slab across the artwork and read badly on both light and dark
+   images. The height it costs is worth paying. */
+.postercol { position: static; }
+
+/* "Fits your schedule on" - the date, and how much room is really around it. */
+.fitrow {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 12px; padding: 5px 0; border-bottom: 1px solid var(--line);
+}
+.fitrow:last-child { border-bottom: none; }
+.fitrow .fd { font-size: 12.5px; }
+.fitrow .fs { display: flex; gap: 8px; flex: none; }
+.fitrow .fs i {
+  font-style: normal; font-size: 11px; font-family: var(--mono);
+  color: var(--accent-2); white-space: nowrap;
+}
+
+/* The month grid is not tappable in a card - expanding it burst out of the
+   row and looked broken. `.calm.big` survives for the show sheet only, where
+   it is rendered large from the start. */
+.card .calm { cursor: default; }
+
+/* Slack figures: legible green, and orange when it is under half an hour.
+   The teal used for "free time" elsewhere is too pale against white here. */
+:root {
+  --slack-ok:    #4ade9b;   /* dark theme: bright enough on a dark card */
+  --slack-tight: #ffb454;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --slack-ok:    #10763f;  /* deep green, readable on white */
+    --slack-tight: #b45309;  /* amber-brown, same weight as the green */
+  }
+}
+.fitrow .fs i { color: var(--slack-ok); font-weight: 650; }
+.fitrow .fs i.tight { color: var(--slack-tight); font-weight: 700; }
+
+/* Under an hour is orange; under 25 minutes is red - the point where a
+   turnaround stops being a detail and becomes a decision. */
+:root { --slack-urgent: #ff6b6b; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) { --slack-urgent: #c01313; }
+}
+.fitrow .fs i.urgent { color: var(--slack-urgent); font-weight: 700; }
+
+/* The 25-59 minute band reads yellow, not orange - it was sitting too close to
+   the red and the two bands stopped being distinguishable at a glance. Dark
+   theme uses Google's Banana, the same yellow as a held show; light theme uses
+   a deeper gold so it stays legible on white. */
+:root { --slack-tight: #f6bf26; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) { --slack-tight: #a07800; }
+}
+
+/* ------------------------------------------------------------- holding */
+.holdwrap { margin-top: 14px; }
+.holdrow { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.holdbtn {
+  font-size: 11px; font-weight: 650; padding: 6px 10px; border-radius: 999px;
+  background: var(--bg-2); border: 1px solid var(--line); color: var(--ink);
+}
+.holdbtn.on {
+  background: color-mix(in srgb, var(--gcal-banana) 22%, var(--bg-2));
+  border-color: var(--gcal-banana);
+  color: color-mix(in srgb, var(--gcal-banana) 75%, var(--ink));
+}
+
+/* A hold the Mac has not pushed to EdFringe yet: same yellow, drawn lighter so
+   it reads as in-flight rather than confirmed. */
+.tl-hold.pending { opacity: 0.72; border-style: dotted; }
+/* The button keeps its size when held - changing the label reflowed the row
+   and moved the button he had just tapped. */
+.holdbtn { min-width: 104px; text-align: center; }
+
+/* The close button stays reachable in a long sheet instead of scrolling away
+   with the content. */
+.sheet-closewrap {
+  position: sticky; top: 0; height: 0; z-index: 20;
+  display: flex; justify-content: flex-end; pointer-events: none;
+}
+.sheet-closewrap .sheet-close {
+  position: relative; top: -2px; right: -2px; float: none; margin: 0;
+  pointer-events: auto;
+}
+
+/* Sheet header: artwork beside the title. */
+.sheethead { display: flex; gap: 12px; align-items: flex-start; }
+.sheetwords { min-width: 0; }
+.poster.big { width: 84px; height: 112px; border-radius: 8px; flex: none; }
+@media (max-width: 480px) {
+  .poster.big { width: 66px; height: 88px; }
+}
+
+/* When holds share a slot the chips get narrow, so the poster goes and the
+   title wraps to two lines instead of being cut after three words. */
+.tl-hold.narrow { padding: 3px 6px; gap: 5px; }
+.tl-hold.narrow .poster { width: 16px; height: 22px; }
+.tl-hold.narrow .h1 { white-space: normal; -webkit-line-clamp: 2; display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+.tl-hold.narrow .h2 { font-size: 9px; }
+
+/* Nothing in a hold chip may wrap out of its box: the chip's height is set by
+   the show's duration, not by how much text there is. */
+.tl-hold .h1, .tl-hold .h2 {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+}
+.tl-hold.narrow .h1 { white-space: nowrap; -webkit-line-clamp: none; display: block; }
+.tl-hold .hb { flex: 1; min-width: 0; overflow: hidden; }
+
+/* One consistent chip: poster, one line of title, one line of status. It never
+   grows with the show's duration - the timeline position already says when it
+   is and for how long. */
+.tl-hold { max-height: 46px; align-items: center; }
+.tl-hold .poster { width: 24px; height: 32px; }
+.tl-hold .h1 { font-size: 11.5px; line-height: 1.25; }
+.tl-hold .h2 { font-size: 10px; line-height: 1.2; margin-top: 1px; }
+.tl-hold.narrow .poster { width: 18px; height: 24px; }
+
+/* A booked show narrowed by an overlapping hold must not spill its text. */
+.tl-item .t, .tl-item .w {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Booked shows carry their artwork too, at a size that suits a full-width row. */
+.tl-item { display: flex; align-items: center; gap: 8px; }
+.tl-item .itw { min-width: 0; flex: 1; }
+.poster.tiny { width: 22px; height: 30px; border-radius: 4px; }
+
+/* A booked EdFringe show is tappable like anything else. */
+.tl-item.tappable { cursor: pointer; }
+.tl-item.tappable:active { filter: brightness(1.15); }
+/* A date he already owns: shown, not offered. */
+.holdbtn.owned {
+  background: color-mix(in srgb, var(--gcal-sage) 20%, var(--bg-2));
+  border-color: var(--gcal-sage);
+  color: color-mix(in srgb, var(--gcal-sage) 70%, var(--ink));
+  cursor: default;
+}
+
+/* "busy" is a different state from "open tickets" - it is a clash with his own
+   day, so it reads amber rather than teal. */
+.dcell.open { border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+/* ⚠️ nth-child(2), not last-child: the state word is the second line, and a
+   cell that also carries a per-date time has a third. Under last-child the
+   amber jumped onto the time and left "busy" grey. */
+.dcell.open div:nth-child(2) { color: var(--warn); }
+
+/* The per-date time, shown only where a show does not keep its usual hour.
+   Deliberately quiet - it is a correction, not a headline - and tabular so the
+   digits line up down a column of dates. */
+.dategrid .dcell .dtime {
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  font-size: 8.5px; line-height: 1.25; letter-spacing: -0.02em;
+  color: var(--ink-3); opacity: 0.95; margin-top: 1px;
+}
+
+/* Availability as a proper week: seven columns, Monday first, weekday heads. */
+.dategrid.week { grid-template-columns: repeat(7, 1fr); gap: 5px; }
+.dategrid.week .wdh {
+  font-style: normal; font-size: 10px; font-weight: 700; color: var(--ink-3);
+  text-align: center; letter-spacing: 0.04em;
+}
+.dategrid.week .dcell.blank { background: transparent; border-color: transparent; }
+
+/* The availability days are the control now: tappable, with held and booked
+   states, and today ringed. */
+.dategrid.week button.dcell { cursor: pointer; font: inherit; color: inherit; }
+.dategrid.week button.dcell:active { filter: brightness(1.25); }
+.dcell.heldcell {
+  background: color-mix(in srgb, var(--gcal-banana) 20%, var(--bg-2));
+  border-color: var(--gcal-banana);
+}
+.dcell.heldcell div:last-child { color: var(--gcal-banana); }
+.dcell.owned {
+  background: color-mix(in srgb, var(--gcal-sage) 18%, var(--bg-2));
+  border-color: var(--gcal-sage);
+}
+.dcell.owned div:last-child { color: var(--gcal-sage); }
+.dcell.istoday { box-shadow: 0 0 0 2px var(--warn); }
+
+/* Today is not a status, so it must not borrow a status colour. Amber read as
+   "busy", and teal/red/yellow/sage are all taken by fits / gone / held /
+   booked. A neutral high-contrast ring says "you are here" and nothing else. */
+.dcell.istoday { box-shadow: 0 0 0 2px var(--ink); }
+.calm-grid .today { box-shadow: 0 0 0 2px var(--ink); }
+
+/* "Held" is a ring, not a fill: the cell's colour still says what the
+   availability is, so a sold-out date he is watching stays red and a date that
+   fits stays teal. Sold-out dates are holdable because allocation reopens -
+   the hold is how he catches it. */
+.dcell.isheld { outline: 2px solid var(--gcal-banana); outline-offset: -2px; }
+.dcell.isheld div:last-child { color: var(--gcal-banana); font-weight: 700; }
+
+/* "gone" was drawn by fading the cell to 42% opacity, which reads as grey and
+   also faded the held ring on top of it. Sold-out is a state, not an absence,
+   so it gets a real colour - and a held sold-out date now shows red for the
+   availability and yellow for the hold at full strength. */
+:root { --gone-ink: #ff6b6b; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) { --gone-ink: #c01313; }
+}
+.dcell.gone {
+  opacity: 1;
+  background: color-mix(in srgb, var(--gone-ink) 14%, var(--bg-3));
+  border-color: color-mix(in srgb, var(--gone-ink) 45%, transparent);
+}
+.dcell.gone .d, .dcell.gone div:last-child { color: var(--gone-ink); }
+.dcell.gone.isheld div:last-child { color: var(--gcal-banana); }
+
+/* "busy" gets an amber wash like the others get theirs, so the three live
+   states read as filled cells rather than one filled and one outlined. The day
+   number was still teal here from when this state was called "open" - teal is
+   "fits" everywhere else, so it now matches its own label. */
+.dcell.open {
+  background: color-mix(in srgb, var(--warn) 13%, var(--bg-3));
+}
+.dcell.open .d { color: var(--warn); }
+
+/* In a gap sheet the date is already decided, so each show carries a hold for
+   that exact performance rather than sending him into the show to find it. */
+/* Heading and its sort toggle share one row - dense, and the toggle is always
+   present so it never appears or disappears between openings. It wraps rather
+   than crushing the heading on a narrow phone. */
+.gaphead {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap; margin: 14px 0 8px;
+}
+.gaphead h3 { margin: 0; }
+/* Two segments - which list, then how it is ordered.
+   ⚠️ Each one is a SEGMENTED CONTROL in its own tray, not four loose chips in
+   a row: "this looks like its 4 options, not 2 separate toggles", 2026-08-18.
+   The tray is what says where one question ends and the next begins, so the
+   gap between them can stay modest and the pair still wraps as a pair. */
+/* ⚠️ The ORDERINGS now live on their own line, centred, since 2026-08-23. A
+   fourth option ("Nearby now") pushed the pair past the width of his phone and
+   the last chip was cut off by the sheet edge. The heading keeps the
+   which-list toggle company on the line above; these get the full width. */
+.gapsegs {
+  display: flex; gap: 8px; flex-wrap: wrap; flex: none;
+  justify-content: center; margin: 0 0 10px;
+}
+/* The heading must not squeeze the toggle beside it off the line - it wraps,
+   the control does not. */
+.gaphead h3 { flex: 1 1 auto; min-width: 0; }
+.gaphead .gapsort { flex: 0 0 auto; }
+.gapsort {
+  display: inline-flex; gap: 2px; flex: none; padding: 2px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 999px;
+}
+.gapsort .chip {
+  font-size: 12px; padding: 4px 11px; border: 1px solid transparent;
+  background: transparent; color: var(--ink-3);
+}
+/* The selected one is the raised tile inside the tray - filled and outlined,
+   against neighbours that are neither. */
+.gapsort .chip.is-on {
+  background: var(--bg-3); border-color: var(--today); color: var(--ink);
+}
+
+/* The foot of the Discover list: how much is on screen, and the way to more. */
+.loadmore {
+  align-self: stretch; margin-top: 4px; padding: 10px;
+  font-size: 12.5px; font-weight: 650; color: var(--ink-2);
+  background: var(--bg-2); border: 1px dashed var(--line-2);
+  border-radius: var(--radius);
+}
+.loadmore:active { background: var(--bg-3); color: var(--ink); }
+
+.gapitem { display: flex; flex-direction: column; }
+.gaphold {
+  align-self: stretch; margin-top: -1px;
+  font-size: 11.5px; font-weight: 650; padding: 7px 10px;
+  border: 1px solid var(--line); border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: var(--bg-2); color: var(--ink-2);
+}
+.gaphold:active { background: var(--bg-3); }
+.gaphold.on {
+  background: color-mix(in srgb, var(--gcal-banana) 20%, var(--bg-2));
+  border-color: var(--gcal-banana);
+  color: color-mix(in srgb, var(--gcal-banana) 78%, var(--ink));
+}
+.gapitem .card { border-radius: var(--radius) var(--radius) 0 0; }
+
+/* The gap's label and its "N favourites fit" button sit on the LEFT: holds
+   occupy the right-hand band of the timeline, and centred text ran straight
+   underneath them. */
+.tl-gap { align-items: flex-start; justify-content: center; padding-left: 10px; text-align: left; }
+.tl-gap .g1, .tl-gap .g2 { text-align: left; }
+.tl-gap .g2 { align-self: flex-start; }
+.tl-gap.tiny { flex-direction: row; align-items: center; gap: 8px; }
+
+/* The hold action reads as a button whether or not it is set: its own surface,
+   a bookmark glyph, and half the height it had. */
+.gaphold {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 5px 10px; font-size: 11px; letter-spacing: 0.01em;
+  background: var(--bg-3); border: 1px solid var(--line); border-top: none;
+  color: var(--ink-2);
+}
+.gaphold .bmk { width: 11px; height: 11px; fill: currentColor; flex: none; }
+.gaphold.on .bmk { fill: var(--gcal-banana); }
+.gapitem { margin-bottom: 0; }
+.gapitem .card { padding-bottom: 6px; }
+
+/* The free-time label and its button share one centre line, as a pair that
+   sits left of the hold band rather than each aligning separately. */
+.gapinner { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+/* No white box: the button belongs to the gap, so it borrows the gap's own
+   teal instead of the browser's default control surface. */
+.tl-gap .g2 {
+  background: color-mix(in srgb, var(--accent-2) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-2) 45%, transparent);
+  color: var(--accent-2);
+  border-radius: 999px; padding: 2px 10px; font-size: 10.5px; font-weight: 600;
+}
+.tl-gap .g2:active { background: color-mix(in srgb, var(--accent-2) 26%, transparent); }
+
+/* ⚠️ `grid-row: 1 / span 3` dates from when these cards stacked three rows in
+   the left column. They are ONE row now, so the span was inventing two empty
+   rows - and their two 10px row-gaps were the dead air he could see under the
+   poster. Measured: 22px of nothing between "1 GAP" and the hold button. */
+.card.cat .calm, .card.fav .calm, .card.act .calm { grid-row: 1; }
+.card.cat, .card.fav, .card.act { row-gap: 0; }
+
+/* ------------------------------------------------------- today, pinned */
+/* Blue, because every other colour in this app means something about a show
+   (sage booked, banana held, tomato gone, teal free, amber filling). "You are
+   here" is not a status, so it gets the one colour nothing else uses. */
+.daycard.is-on { border-color: var(--today); background: var(--bg-3); }
+
+/* Today stays stuck to the left edge of the strip, so scrolling ahead never
+   loses it. Before the trip starts it pins the next day instead - the pin is
+   never absent. The background must be opaque: other cards slide under it. */
+/* Today is ringed, not pinned: the day header floats now, so the strip does
+   not have to hold a card back. Pinning it also cost a card's width of the
+   strip on every scroll.
+   ⚠️ The ring is INSET. An outset ring on the first card is clipped by the
+   strip's own scroll box - the 17th lost its left edge - and padding the
+   strip to make room would misalign it with everything else on the page. */
+/* ⚠️ Today and the selected day are BOTH blue, so they are told apart by
+   shape, not colour: today is an outline, the selected day is filled. Two
+   rings side by side were indistinguishable.
+   The ring is inset - an outset one is clipped by the strip's scroll box. */
+.daycard.is-today {
+  border-color: var(--today);
+  box-shadow: inset 0 0 0 2px var(--today);
+}
+.daycard.is-today .wd { color: var(--today); font-weight: 700; letter-spacing: 0.04em; }
+
+.daycard.is-on {
+  background: color-mix(in srgb, var(--today) 30%, var(--bg-2));
+  border-color: color-mix(in srgb, var(--today) 70%, transparent);
+  box-shadow: none;
+}
+.daycard.is-on .wd { color: color-mix(in srgb, var(--today) 45%, var(--ink)); }
+/* Both at once - the usual case on opening - keeps the ring and the fill. */
+.daycard.is-on.is-today { box-shadow: inset 0 0 0 2px var(--today); }
+
+/* The other two today markers move to the same blue, so "today" reads the
+   same everywhere. */
+.dcell.istoday { box-shadow: 0 0 0 2px var(--today); }
+.calm-grid .today { box-shadow: 0 0 0 2px var(--today); }
+
+/* ---------------------------------------------- one show = one bordered box */
+/* The card and its hold button are ONE thing: a show he can take on this date.
+   Two separately-bordered pieces on a dark background read as a soup of rows,
+   so the pair is wrapped in a single stronger stroke and the inner edges go. */
+.gapitem {
+  border: 1px solid var(--line-2); border-radius: var(--radius);
+  background: var(--bg-2); overflow: hidden;
+}
+.gapitem + .gapitem { margin-top: 9px; }
+.gapitem .card { border: none; border-radius: 0; }
+.gapitem .gaphold {
+  border: none; border-top: 1px solid var(--line-2); border-radius: 0; margin-top: 0;
+}
+/* A held show carries the banana stroke around the WHOLE box, so what he has
+   already taken is obvious down the list without reading a word. */
+.gapitem:has(.gaphold.on) { border-color: var(--gcal-banana); }
+.gapitem:has(.gaphold.on) .gaphold { border-top-color: var(--gcal-banana); }
+
+/* Activity rows are cards like any other: poster, body, month grid. The
+   changed dates are ringed rather than tinted - the cell still has to say
+   whether that date is bookable. */
+.card.act .when { font-size: 10.5px; color: var(--ink-3); margin-top: 4px; line-height: 1.35; }
+/* In Browse a ringed cell means "fits a gap". Here it means "this is the date
+   that changed", so it takes the neutral blue rather than the fits colour. */
+.card.act .calm-grid .gapfit { box-shadow: 0 0 0 2px var(--today); color: var(--ink); }
+
+/* ------------------------------------------------- the day header, pinned */
+/* Scrolling down a 19-hour day loses the date, which is the one thing he
+   needs to know while reading it. The header pins under the masthead and the
+   tabs - offsets measured at runtime, because the masthead grows by the
+   notch inset on his phone. */
+.tabs { top: var(--pin-1, 52px); }
+.dayhead {
+  position: sticky; top: var(--pin-2, 107px); z-index: 20;
+  background: var(--bg); margin: 0 0 10px;
+  padding: 8px 0 7px; border-bottom: 1px solid var(--line);
+}
+/* Stands in for the month grid when a show does not play during his trip. */
+/* ⚠️ Sized and aligned to the month block it stands in for. It was a fixed
+   116px box, top-aligned with heavy padding, so on a phone it wrapped to two
+   lines and sat as a large empty dashed panel beside a short card - louder than
+   the card itself. Centred, tighter, and it no longer shouts. His report,
+   2026-08-16. */
+.calnone {
+  width: 116px; flex: none; align-self: center; box-sizing: border-box;
+  padding: 8px 6px; border-radius: 9px;
+  background: var(--bg-3); border: 1px dashed var(--line-2);
+  font-size: 10px; line-height: 1.25; color: var(--ink-3); text-align: center;
+}
+
+/* Stepping days from the pinned header - the one control always in reach. */
+.daynav { display: flex; align-items: center; justify-content: center; gap: 6px; }
+.daystep {
+  flex: none; width: 28px; height: 28px; border-radius: 50%;
+  background: var(--bg-2); border: 1px solid var(--line-2); color: var(--ink-2);
+  font-size: 17px; line-height: 1; font-weight: 600;
+}
+.daystep:active { background: var(--bg-3); color: var(--ink); }
+.daystep:disabled { opacity: 0.3; }
+
+/* A day the show is not on still shows its date, greyed: the grid has to read
+   as a calendar, and empty squares gave the eye nothing to count along. */
+.dategrid.week .dcell.blank {
+  background: transparent; border-color: transparent; min-height: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.dategrid.week .dcell.blank .d { color: var(--ink-3); opacity: 0.45; font-weight: 500; }
+
+/* A hold on a date that has since sold out: still a hold - the dashed banana
+   border stays - but the fill warns that it is gone. */
+.tl-hold.soldout {
+  /* A hint, not an alarm: at 26% the chip read as an error state and shouted
+     down the four holds beside it. This is enough to pick out at a glance
+     while the banana border still says "held". */
+  --block-bg: color-mix(in srgb, var(--gcal-tomato) 12%, var(--bg-2));
+  background: var(--block-bg);
+}
+.tl-hold.soldout .h2 { color: color-mix(in srgb, var(--gcal-tomato) 34%, var(--ink-2)); }
+
+/* A hold for a show he has already bought on another night. Sage, because
+   that is what a ticket is everywhere else in this app. It sits in the chip's
+   top corner where nothing else lives, so it never pushes the title around. */
+.tktbadge {
+  position: absolute; top: 3px; right: 5px; z-index: 4;
+  display: flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; pointer-events: none;
+}
+.tktbadge .tkt { width: 14px; height: 14px; fill: var(--gcal-sage); }
+.tl-hold.narrow .tktbadge { top: 2px; right: 3px; width: 11px; height: 11px; }
+.tl-hold.narrow .tktbadge .tkt { width: 11px; height: 11px; }
+/* On a booked row the stub sits in the same corner as it does on a hold, so
+   "ticket in hand" looks the same everywhere. */
+.tl-item { position: absolute; }
+.tl-item .tktbadge { top: 4px; right: 6px; }
+
+/* Two booked things at once: they share the row instead of hiding each other. */
+.tl-item.narrow { padding: 4px 7px; gap: 6px; }
+.tl-item.narrow .t { font-size: 11.5px; }
+.tl-item.narrow .w { font-size: 10px; }
+.tl-item.narrow .poster.tiny { width: 16px; height: 22px; }
+
+/* The heart: on the show sheet only. A heart on a Browse card would be one
+   stray thumb away from silently rewriting his favourites list. */
+.favbtn {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 8px;
+  padding: 5px 11px; border-radius: 999px; font-size: 11.5px; font-weight: 650;
+  background: var(--bg-3); border: 1px solid var(--line-2); color: var(--ink-2);
+}
+.favbtn .hrt { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; }
+.favbtn.on {
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-2));
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  color: color-mix(in srgb, var(--accent) 75%, var(--ink));
+}
+.favbtn.on .hrt { fill: var(--accent); stroke: var(--accent); }
+.favbtn:active { filter: brightness(1.2); }
+
+/* ------------------------------------------------------------- his stars
+   One star per show, tapped hollow -> silver -> gold -> hollow. See STARS.md.
+
+   ⚠️ THE MEANING IS CARRIED BY FILL, NOT HUE. Hollow is a stroked outline,
+   silver and gold are filled. That matters because --gcal-banana (#f6bf26)
+   already means "held" and gold is unavoidably the same family - he asked for
+   a gold star in those words, so the colour stays and the STAR SHAPE plus the
+   fill level is what separates them. These two tokens must never be used on a
+   status chip or block, where they would genuinely fight banana; the star is
+   their only home.
+
+   ⚠️ Still to be eyeballed on his phone against a banana hold, per STARS.md.
+   Do not settle it from a screenshot. */
+:root {
+  --star-silver: #c6c9d6;
+  --star-gold:   #ffc93f;
+}
+
+.starbtn {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 8px;
+  padding: 5px 11px; border-radius: 999px; font-size: 11.5px; font-weight: 650;
+  background: var(--bg-3); border: 1px solid var(--line-2); color: var(--ink-2);
+}
+.starbtn .str { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; }
+.starbtn.s1 {
+  background: color-mix(in srgb, var(--star-silver) 14%, var(--bg-2));
+  border-color: color-mix(in srgb, var(--star-silver) 55%, transparent);
+  color: color-mix(in srgb, var(--star-silver) 80%, var(--ink));
+}
+.starbtn.s1 .str { fill: var(--star-silver); stroke: var(--star-silver); }
+.starbtn.s2 {
+  background: color-mix(in srgb, var(--star-gold) 18%, var(--bg-2));
+  border-color: color-mix(in srgb, var(--star-gold) 60%, transparent);
+  color: color-mix(in srgb, var(--star-gold) 80%, var(--ink));
+}
+.starbtn.s2 .str { fill: var(--star-gold); stroke: var(--star-gold); }
+.starbtn:active { filter: brightness(1.2); }
+.sheetacts .starbtn { margin-top: 0; justify-content: center; }
+
+/* Display only, on a list row. Never drawn for an unrated show - a hollow
+   outline on 3,400 browse rows is noise, not information. */
+.starmark { display: inline-flex; vertical-align: -2px; margin-left: 5px; }
+.starmark .str { width: 11px; height: 11px; stroke-width: 1.5; }
+.starmark.s1 .str { fill: var(--star-silver); stroke: var(--star-silver); }
+.starmark.s2 .str { fill: var(--star-gold);   stroke: var(--star-gold); }
+
+/* A favourite he has starred here that EdFringe has not confirmed yet - the
+   same dotted language the pending holds use. */
+.card.fav.pendingfav { border-style: dashed; }
+.card.fav.pendingfav .ttl::after {
+  content: "queued"; margin-left: 6px; padding: 1px 5px; border-radius: 4px;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg-2));
+  color: color-mix(in srgb, var(--accent) 80%, var(--ink));
+  vertical-align: 2px;
+}
+
+/* A held show on Book Next: not a favourite, but something he has pencilled
+   in - banana, the colour a hold has everywhere else. */
+.card.fav.heldfav { border-color: color-mix(in srgb, var(--gcal-banana) 55%, transparent); }
+.card.fav.heldfav .ttl::after {
+  content: "held"; margin-left: 6px; padding: 1px 5px; border-radius: 4px;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  background: color-mix(in srgb, var(--gcal-banana) 22%, var(--bg-2));
+  color: color-mix(in srgb, var(--gcal-banana) 85%, var(--ink));
+  vertical-align: 2px;
+}
+
+/* Nothing bookable left: the card is still readable, just clearly spent. */
+.card.fav.nodates .poster { filter: grayscale(0.55) brightness(0.85); }
+.card.fav.nodates .ttl { color: var(--ink-2); }
+
+/* Which dates reopened, and how long ago - the teal that means "free/open"
+   everywhere else in the app. */
+.fit.backline { color: var(--accent-2); font-size: 11px; }
+
+/* Two actions, one cheap and one expensive - side by side, same size. */
+.topbtns { display: flex; gap: 8px; align-items: center; }
+
+/* Sync, made visible: what is talking, and to whom. Invisible when idle. */
+.syncbadge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px 3px 7px; border-radius: 999px;
+  background: rgba(255,255,255,0.14); color: #fff;
+  font-size: 10.5px; font-weight: 650; letter-spacing: 0.01em; white-space: nowrap;
+}
+.syncbadge[hidden] { display: none; }
+.syncbadge .dotspin {
+  width: 9px; height: 9px; border-radius: 50%; flex: none;
+  border: 2px solid rgba(255,255,255,0.35); border-top-color: #fff;
+  animation: spin 0.8s linear infinite;
+}
+@media (max-width: 520px) { .syncbadge b { display: none; } }
+
+/* Finished states: a tick that lingers ~3s, so a sync that worked does not
+   look identical to one that never happened. */
+.syncbadge .tick { display: none; width: 11px; height: 11px; flex: none;
+  fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.syncbadge.done .dotspin, .syncbadge.fail .dotspin { display: none; }
+.syncbadge.done .tick { display: block; }
+.syncbadge.done { background: color-mix(in srgb, var(--gcal-sage) 82%, transparent); color: #06210f; }
+.syncbadge.fail { background: color-mix(in srgb, var(--warn) 88%, transparent); color: #241300; }
+.syncbadge.fail .tick { display: block; }
+.syncbadge.fail .tick path { d: path("M12 5v9M12 18.5v.5"); }
+
+/* Pull-to-refresh: fetches the latest published data. Hidden until pulled. */
+.ptr {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 40;
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  height: 44px; margin-top: -44px; pointer-events: none;
+  font-size: 11.5px; font-weight: 650; color: var(--ink-2);
+  background: var(--bg); border-bottom: 1px solid var(--line);
+  opacity: 0; transition: opacity 0.15s ease;
+}
+.ptr.on { opacity: 1; }
+.ptr .dotspin {
+  width: 11px; height: 11px; border-radius: 50%; flex: none;
+  border: 2px solid var(--line-2); border-top-color: var(--accent-2);
+  animation: none;
+}
+.ptr.armed { color: var(--accent-2); }
+.ptr.armed .dotspin { border-top-color: var(--accent-2); transform: rotate(180deg); }
+.ptr.spin .dotspin { animation: spin 0.8s linear infinite; }
+/* Body overscroll fights the gesture on iOS; contain it. */
+html, body { overscroll-behavior-y: contain; }
+
+/* When the data was last brought up to date - two different ages, named. */
+.lastsync {
+  font-size: 10px; letter-spacing: 0.01em; white-space: nowrap;
+  color: rgba(255,255,255,0.6);
+}
+@media (max-width: 560px) { .lastsync { display: none; } }
+.lastsync[hidden] { display: none; }
+
+/* Both sheet actions together, under the title - reachable without scrolling
+   past a 30-date availability grid. */
+/* stretch, not center: the heart is 1.2px taller than a plain pill because of
+   its icon, and two nearly-equal pills look like a mistake. */
+/* Centred across the whole sheet, not left-aligned under the text column. */
+.sheetacts {
+  display: flex; align-items: stretch; justify-content: center;
+  gap: 10px; flex-wrap: wrap; margin-top: 14px;
+}
+.sheetacts > * { flex: 0 1 auto; min-width: 150px; }
+/* The heart + label sit centred in the pill; the button is a flex container and
+   was defaulting to flex-start, so the content hugged the left edge. */
+.sheetacts .favbtn { margin-top: 0; justify-content: center; }
+/* Matched to .favbtn exactly - same padding, type and 1px border - so the two
+   pills are the same height rather than nearly the same. */
+.btn.small {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 5px 11px; border: 1px solid transparent; border-radius: 999px;
+  font-size: 11.5px; font-weight: 650; line-height: 1.35;
+  text-decoration: none; white-space: nowrap;
+}
+
+/* Where "now" is on the day - Edinburgh time, drawn only on today. */
+/* ⚠️ Crosses the WHOLE day, over the show blocks rather than under them, so
+   "where am I now" reads in one glance. Translucent at 42% because a solid
+   white rule over five coloured blocks was all he could look at. */
+/* ⚠️ The line STARTS at the arrow - nothing to its left. The triangle is
+   solid and 8px wide, so it covers the line's own first 8px and the mark
+   reads as one arrow with a tail, not a dash-arrow-dash. */
+.nowline {
+  /* Runs off both ends: into the left margin for the arrow, and clean off the
+     right edge of the screen so the day reads as cut in two. */
+  position: absolute; left: -7px; right: -14px; height: 0; pointer-events: none;
+  border-top: 1.5px solid transparent;
+}
+/* Under the shows, at full strength - only visible where nothing covers it. */
+.nowline.under { z-index: 1; border-top-color: rgba(255,255,255,0.95); }
+/* Over the shows, faint - the only part that survives on a coloured block. */
+.nowline.over  { z-index: 3; border-top-color: rgba(255,255,255,0.38); }
+/* The arrow head, pointing right along the line. Solid: it is small, and it
+   is the part that says which line this is. */
+/* ⚠️ Two alignments that both have to be exact or it reads as a mistake:
+   VERTICAL - the triangle is 10px tall, so its centre is 5px below its top;
+   the line's own centre is half its 1.5px border. -4.25px puts one exactly on
+   the other (it was 0.75px out).
+   HORIZONTAL - the tip sits 2px short of the "8pm" label, so it points AT the
+   label with a short stub of line behind it, instead of floating on its own
+   10px away. */
+.nowline i {
+  position: absolute; left: 0; top: -5.75px;   /* measured, not derived */
+  width: 0; height: 0; border-radius: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 8px solid rgba(255,255,255,0.95);
+}
+.timeline .tl-item, .timeline .tl-hold, .timeline .tl-gap { z-index: 2; }
+/* ⚠️ The hour label sits ABOVE the line on its own patch of background, so the
+   line cannot strike through "8pm". It hugs the TEXT rather than filling the
+   36px gutter - otherwise its background swallowed the segment between the
+   arrow and the label, and the arrow looked detached. */
+.timeline .tl-hour span {
+  z-index: 4; left: auto; right: calc(100% - 36px); width: auto;
+  background: var(--bg); padding: 1px 3px;
+}
+
+/* The now-line in light mode: white on white is nothing, so it inverts. The
+   same two-layer trick - solid underneath, faint over the show blocks. */
+@media (prefers-color-scheme: light) {
+  .nowline.under { border-top-color: rgba(20, 18, 34, 0.85); }
+  .nowline.over  { border-top-color: rgba(20, 18, 34, 0.34); }
+  .nowline i { border-left-color: rgba(20, 18, 34, 0.9); }
+}
+:root[data-theme="light"] .nowline.under { border-top-color: rgba(20, 18, 34, 0.85); }
+:root[data-theme="light"] .nowline.over  { border-top-color: rgba(20, 18, 34, 0.34); }
+:root[data-theme="light"] .nowline i { border-left-color: rgba(20, 18, 34, 0.9); }
+
+/* ⚠️ The now-line skips around TEXT, the way it does around "8pm": each run of
+   words carries its own patch of the block's background and sits above the
+   line, so the rule breaks around the words instead of striking through them.
+   `background: inherit` picks up whatever that block is tinted with - sage for
+   booked, banana for held, blue for a commitment - without naming any of them
+   again here. inline-block so the patch hugs the text rather than filling the
+   whole column. Posters get the same treatment: a line across a face reads as
+   a printing fault. */
+/* ⚠️ `background: inherit` did NOT work: the text's parent (.itw / .hb) is
+   transparent, so the patches inherited transparency and nothing punched
+   through. The block records its own fill in a variable instead - one place
+   per kind - and the text patches use that. */
+/* ⚠️ These were `inline-block`, which pushed the two lines apart. An inline-block
+   sits in its own line box, and the parent's strut adds leading underneath it -
+   measured 9.75px between title and status where the CSS asks for 1px. `block` +
+   `width: fit-content` still shrinks to the text, which is what the patch needs,
+   with no inline leading. Verified 1px at 375px and 1280px. Don't restore
+   inline-block; if it is ever needed again, zero the line-height on .hb / .itw. */
+.timeline .tl-item .itw > *,
+.timeline .tl-hold .hb > * {
+  position: relative; z-index: 4;
+  background: var(--block-bg, transparent);
+  display: block; width: fit-content; max-width: 100%; padding: 0 3px; margin-left: -3px;
+}
+.timeline .tl-item .poster,
+.timeline .tl-hold .poster { position: relative; z-index: 4; }
+
+/* ------------------------------------------------------- app updates */
+/* The escape hatch for a cache-first shell (see index.html). Sits at the
+   bottom of Activity, always present - never a control that comes and goes. */
+.appup { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line); }
+.appup .btn { margin-right: 8px; }
+.appup-status { font-size: 12px; color: var(--ink-2); }
+.appup .explain { margin-top: 10px; }
+/* Mono for the build id: it is a number he reads back to check a deploy. */
+.appbuild {
+  margin-top: 8px; font-size: 11px; color: var(--ink-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Past dates in the POPUP stay faint and untappable, matching off-trip ones.
+   The sell-out history he asked for lives on the card's mini calendar. */
+.dcell.past { opacity: 0.3; }
+
+/* A favourite that has just added dates. Teal like "tickets back" - both mean
+   "there is suddenly a way in" - but distinct from it, because one is a return
+   and the other is new stock. */
+.tag.newdates {
+  background: color-mix(in srgb, var(--gcal-sage) 22%, transparent);
+  color: var(--gcal-sage);
+}
+
+/* ------------------------------------------------- gap anchors (audit #3)
+   What the gap hangs between, and a flag when a "fit" is really a transfer.
+   Both follow the deep-light-twin pattern above: the dark value is tuned for a
+   dark card, and light mode gets its own deeper value rather than inheriting
+   one that washes out on white. */
+:root { --gapfar: #ffb454; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) { --gapfar: #a1500a; }
+}
+:root[data-theme="dark"] { --gapfar: #ffb454; }
+
+.gapanchor {
+  margin: 8px 0 2px; padding: 8px 10px;
+  background: var(--bg-2); border: 1px solid var(--line);
+  /* ⚠️ BOTH edges. One accent bar read as a quiet margin rule and the line
+     was easy to skim past - "put this little design accent on both left and
+     right of those info boxes so it's more easy to notice", 2026-08-18.
+     Bracketed, it reads as a thing rather than as the edge of the sheet. */
+  border-left: 3px solid var(--commit);
+  border-right: 3px solid var(--commit);
+  border-radius: 8px; font-size: 12.5px; line-height: 1.4;
+  color: var(--ink-2);
+}
+.gapanchor b { color: var(--ink); font-weight: 650; }
+/* --ink-3 measured 3.45:1 in light mode - under AA for text this size, and
+   this line is information, not decoration. --ink-2 keeps it quieter than the
+   title while staying readable. Audit #3. */
+.gapanchor i { color: var(--ink-2); font-style: normal; }
+/* The closing line sits under the list rather than over it; same bracket,
+   just a little more air above it. */
+.gapanchor.ends { margin: 10px 0 2px; }
+
+.gapfar {
+  margin: 4px 0 0; font-size: 11.5px; font-weight: 600;
+  color: var(--gapfar);
+}
+.gapwalk {
+  margin: 4px 0 0; font-size: 11.5px; font-weight: 600; color: var(--ink-2);
+}
+
+/* ------------------------------------------- light-mode text twins (audit #3)
+   ⚠️ A status colour used as a FILL and the same colour used as TEXT are two
+   different jobs, and light mode only forgives the first. Google's Banana
+   (#f6bf26) on a 20%-banana card measures 1.33:1 - the held showtime on a date
+   square was effectively invisible on a phone in daylight, which is exactly
+   when he is reading it. Same story for the teal free-time labels.
+
+   The colours themselves do NOT change: fills, borders, outlines and dots keep
+   Google's exact hex so the app still agrees with his Edinburgh Planner
+   calendar. Only the places where the colour is being asked to be readable text
+   get a deeper twin, and only in light mode. Same pattern as --slack-* above. */
+:root {
+  --banana-ink: var(--gcal-banana);
+  --teal-ink:   var(--accent-2);
+  --warn-ink:   var(--warn);
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --banana-ink: #7a5400;   /* deep gold  - ~7.4:1 on a banana-tinted card */
+    --teal-ink:   #0b6156;   /* deep teal  - ~6.9:1 on a teal-tinted card   */
+    --warn-ink:   #8a4b00;   /* deep amber - matches the other two in weight */
+  }
+}
+:root[data-theme="dark"] {
+  --banana-ink: var(--gcal-banana);
+  --teal-ink:   var(--accent-2);
+  --warn-ink:   var(--warn);
+}
+
+/* Held showtimes: on the timeline chip, and on a date square. */
+.tl-hold .h2                       { color: var(--banana-ink); }
+.dcell.heldcell div:last-child,
+.dcell.isheld div:last-child,
+.dcell.gone.isheld div:last-child  { color: var(--banana-ink); }
+.holdbtn.on, .gaphold.on           { color: var(--banana-ink); }
+
+/* Free time: the label in the timeline gap, its tap-through button, and the
+   day card's summary line. */
+.tl-gap .g1, .tl-gap .g2           { color: var(--teal-ink); }
+.daycard .free                     { color: var(--teal-ink); }
+
+/* "TOMORROW" and the other soon/urgency pills. */
+.rel.soon                          { color: var(--warn-ink); }
+
+/* --------------------------------------- light-mode text twins, part 2
+   The rest of the status-colour-as-text set. Same rule as above: the fill keeps
+   its exact hex, only the text gets a deeper twin, and only in light mode.
+   Measured values are Fable's, from audit #3. */
+:root { --sage-ink: var(--gcal-sage); --tomato-ink: var(--gcal-tomato); }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --sage-ink:   #0f6b41;   /* Booked tag, was 2.12:1 */
+    --tomato-ink: #a30000;   /* "13/15 dates gone", was under AA on white */
+  }
+}
+:root[data-theme="dark"] {
+  --sage-ink: var(--gcal-sage);
+  /* ⚠️ Dark theme too, and this is the one exception to "light only": Google's
+     Tomato on a 18%-tomato card measures 2.92:1 against a DARK background, so
+     the "x/y gone" chip was the one place the dark theme was the weak one. */
+  --tomato-ink: #ff7a7a;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --tomato-ink: #ff7a7a; }
+}
+
+.tag.only      { color: var(--warn-ink); }     /* ONLY CHANCE, was 1.56:1 */
+.hero .big     { color: var(--teal-ink); }     /* Book hero number, was 1.67:1 */
+.calmtime.istoday b,
+.calmtime.istoday i { color: var(--teal-ink); }/* today's glance, was 1.67:1 */
+.ptr.armed     { color: var(--teal-ink); }     /* pull-to-refresh, was 1.67:1 */
+.gpickclear    { color: var(--teal-ink); }     /* "Clear all", was 1.79:1 */
+.tag.booked    { color: var(--sage-ink); }     /* Booked tag, was 2.12:1 */
+.pill2.fast    { color: var(--tomato-ink); }   /* "x/y gone", 2.92:1 in DARK */
+
+/* ⚠️ The changed-date ring forced its own digit colour, which fought the theme
+   in BOTH directions (white on teal measured 1.51:1 in dark). The ring already
+   says "this is the date that changed"; the digit just needs to stay legible,
+   so it inherits. Audit #3. */
+.card.act .calm-grid .gapfit { box-shadow: 0 0 0 2px var(--today); }
+
+
+/* ------------------------------------------------------------------ TICKET
+   The barcode screen. His mockup, 2026-08-22: red pill, big QR, title, day,
+   time range, ticket type - centred on white, nothing else on screen.
+
+   ⚠️ HARD-CODED WHITE AND BLACK, not var(--bg-2)/var(--ink). Every other
+   surface follows the theme; this one must not. A door scanner reads a dark
+   QR on a light field, and his phone is in dark mode most of the time. This is
+   the one place in the app where ignoring the theme is the correct answer. */
+.ticket {
+  position: fixed; inset: 0; z-index: 80; background: #ffffff; color: #111111;
+  overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding: calc(28px + env(safe-area-inset-top)) 20px
+           calc(28px + env(safe-area-inset-bottom));
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center;
+}
+.ticket-close {
+  position: fixed; top: calc(10px + env(safe-area-inset-top)); right: 12px;
+  width: 34px; height: 34px; border-radius: 10px;
+  background: #f1f1f1; border: 1px solid #dddddd; color: #333333;
+  display: grid; place-items: center; z-index: 2;
+}
+.ticket-close svg {
+  width: 15px; height: 15px; fill: none; stroke: currentColor;
+  stroke-width: 2; stroke-linecap: round;
+}
+#ticketBody { width: 100%; max-width: 420px; }
+.tkbadge {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: #e14b3f; color: #ffffff; border-radius: 999px;
+  padding: 10px 20px; font-size: 17px; font-weight: 700; letter-spacing: 0.01em;
+}
+.tkbadge .tkt { width: 20px; height: 20px; fill: #ffffff; }
+/* ⚠️ Pixellated, not smoothed. A QR scaled up with smoothing has soft module
+   edges, which is exactly what makes a marginal scan fail. */
+.tkqr {
+  display: block; margin: 34px auto 0; width: min(74vw, 300px); height: auto;
+  image-rendering: pixelated; background: #ffffff;
+}
+.tktitle {
+  margin: 40px 0 0; font-size: 27px; line-height: 1.2; font-weight: 700;
+  color: #111111; letter-spacing: -0.01em;
+}
+.tkwhen { margin-top: 26px; font-size: 17px; font-weight: 700; letter-spacing: 0.02em; }
+.tktime { margin-top: 6px; font-size: 17px; font-weight: 700; letter-spacing: 0.02em; }
+.tktype { margin-top: 22px; font-size: 15px; color: #555555; }
+.tkplace { margin-top: 8px; font-size: 14px; color: #777777; }
+.tkmiss { font-size: 18px; font-weight: 700; margin-bottom: 10px; }
+.tksub { font-size: 14px; color: #555555; line-height: 1.45; }
+.ticketbtn .tkt { width: 14px; height: 14px; fill: currentColor; }
+/* ⚠️ Not --accent. Pink is "booked show" and is also the heart two buttons
+   along; the ticket is a different act from owning the show. Blue, his call
+   2026-08-22, in its own token so it cannot drift into --today's meaning. */
+.ticketbtn { display: inline-flex; align-items: center; gap: 6px;
+             background: var(--ticket); color: #ffffff; }
+.ticketbtn:active { filter: brightness(1.12); }
+.tkcount {
+  margin-top: 30px; font-size: 12px; font-weight: 700; letter-spacing: 0.12em;
+  text-transform: uppercase; color: #888888;
+}
+.tkcount + .tkqr { margin-top: 10px; }

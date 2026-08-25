@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f4c6b">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Fringe">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="img/icon-180.png">
+<link rel="icon" type="image/png" sizes="32x32" href="img/favicon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="img/icon-192.png">
+<link rel="stylesheet" href="style.css">
+<title>Fringe Planner</title>
+</head>
+<body>
+
+<header class="top">
+  <div class="top-row">
+    <!-- Location lives top LEFT, in the grid column that was already reserved
+         and empty. The warning is a button; the confirmation hangs beneath it
+         so a wide pill cannot push the wordmark off centre. -->
+    <div class="topleft">
+      <button id="locwarn" class="icon-btn locwarn" hidden
+              title="No location access — tap to allow it and get walking times"
+              aria-label="No location access. Tap to allow it.">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 21s7-5.5 7-11a7 7 0 1 0-14 0c0 5.5 7 11 7 11z"/>
+          <circle cx="12" cy="10" r="2.6"/>
+          <path d="M4 4l16 16"/>
+        </svg>
+      </button>
+      <span id="locok" class="locok" hidden aria-live="polite"></span>
+    </div>
+    <h1 class="brand">
+      <img src="img/wordmark.png" alt="fringe" class="wordmark">
+      <span>planner</span>
+    </h1>
+    <div class="topbtns">
+      <!-- Says what is happening whenever anything is talking to GitHub or to
+           EdFringe. Empty and invisible the rest of the time. -->
+      <!-- When it was last brought up to date. Steps aside while the sync
+           badge is showing, and comes back when it clears. -->
+      <span id="lastsync" class="lastsync" hidden></span>
+      <span id="syncbadge" class="syncbadge" hidden>
+        <i class="dotspin"></i>
+        <svg class="tick" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12.5l5.5 5.5L20 7"/></svg>
+        <b></b>
+      </span>
+      <!-- ⚠️ DESKTOP ONLY, his request 2026-08-18: "no changes to the mobile
+           version". app.js removes it outright unless isLocal(), so the phone
+           never renders it and the ↻ there keeps its single meaning. Calendar,
+           plan and both syncs, without scanning EdFringe again - a few seconds
+           instead of a minute. -->
+      <button id="calsync" class="icon-btn is-hidden" title="Calendar sync — read your Google Calendar, rebuild the plan, push to GitHub and mirror your holds. No EdFringe scan." aria-label="Calendar sync only">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5A1.5 1.5 0 0 1 5.5 5h13A1.5 1.5 0 0 1 20 6.5v12a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5zM4 9.5h16M8 3v3.5M16 3v3.5"/><path d="M9 14.5l2 2 4-4"/></svg>
+      </button>
+      <button id="refresh" class="icon-btn" title="Ask the Mac to re-read your calendar and publish (the EdFringe scan is a Mac job)" aria-label="Sync calendar and publish">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6"/></svg>
+      </button>
+    </div>
+  </div>
+  <p class="meta" id="meta">Loading&hellip;</p>
+</header>
+
+<!-- Pull down from the top to fetch the latest published data. -->
+<div id="ptr" class="ptr" aria-hidden="true"><i class="dotspin"></i><b>Pull to refresh</b></div>
+
+<nav class="tabs" role="tablist">
+  <button class="tab is-on" data-view="days"     role="tab"><span class="full">My Calendar</span><span class="short">Calendar</span></button>
+  <button class="tab"       data-view="book"     role="tab"><span class="full">Book Next</span><span class="short">Book</span></button>
+  <button class="tab"       data-view="browse"   role="tab">Browse</button>
+  <button class="tab"       data-view="activity" role="tab"><span class="full">What Changed</span><span class="short">Changed</span></button>
+</nav>
+
+<!-- ------------------------------------------------------------- DAYS -->
+<section id="view-days" class="view">
+  <div class="daystrip" id="daystrip"></div>
+  <div id="dayBody"></div>
+  <div class="keyrow" id="dayKey">
+    <span class="k show">Booked show</span>
+    <span class="k bookmarked">Held in Planner</span>
+    <span class="k commitment">Commitment</span>
+    <span class="k medical">Medical</span>
+    <span class="k travel">Travel</span>
+    <span class="k gapk">Free time</span>
+  </div>
+</section>
+
+<!-- --------------------------------------------------------- BOOK NOW -->
+<section id="view-book" class="view is-hidden">
+  <div class="hero" id="bookHero"></div>
+  <div class="filters" id="bookFilters">
+    <button class="chip is-on" data-fit="today">Today</button>
+    <button class="chip" data-fit="urgent">Going fast</button>
+    <button class="chip" data-fit="fits">Fits a gap</button>
+    <button class="chip" data-fit="any">Any date left</button>
+    <button class="chip" data-fit="gone">Sold out</button>
+    <!-- His request 2026-08-17: every other chip answers a question, and none
+         of them answers "just show me the lot". Last, so the ones he uses
+         daily keep their positions. -->
+    <button class="chip" data-fit="all">All</button>
+  </div>
+  <div class="sortrow">
+    <span id="bookCount" class="sortcount"></span>
+    <div class="sortctl">
+      <div class="gpick" data-gpick="book">
+        <button type="button" class="gpickbtn" aria-expanded="false">All genres</button>
+        <div class="gpickpanel is-hidden"></div>
+      </div>
+      <select id="bookSort" aria-label="Sort">
+        <option value="priority">What I'd regret missing</option>
+        <option value="urgency">Most urgent</option>
+        <option value="title">A–Z</option>
+        <option value="depleted">Most depleted</option>
+        <option value="fits">Most gaps it fits</option>
+        <option value="ending">Ending soon</option>
+        <option value="time">Showtime</option>
+      </select>
+    </div>
+  </div>
+  <div id="bookList" class="cards"></div>
+</section>
+
+<!-- ----------------------------------------------------------- BROWSE -->
+<section id="view-browse" class="view is-hidden">
+  <div class="searchwrap">
+    <input id="browseSearch" type="search" placeholder="Search every show, venue or company" autocomplete="off">
+  </div>
+  <!-- Order is his, 2026-08-16: the two he reaches for most sit first, and
+       "All shows" is parked at the far right where it is out of the way. -->
+  <div class="filters scrollrow" id="browseFilters">
+    <button class="chip" data-f="fav">My faves</button>
+    <button class="chip is-on" data-f="open">Currently available</button>
+    <button class="chip" data-f="today">Today</button>
+    <button class="chip" data-f="fast">Selling fast</button>
+    <button class="chip" data-f="fits">Fits a gap</button>
+    <button class="chip" data-f="gone">Sold out</button>
+    <button class="chip" data-f="booked">Booked</button>
+    <button class="chip" data-f="all">All shows</button>
+  </div>
+  <div class="sortrow">
+    <span id="browseCount" class="sortcount"></span>
+    <div class="sortctl">
+      <!-- Genre filter. A panel of checkboxes rather than <select multiple>,
+           which on iOS opens a picker that only takes one value at a time. -->
+      <div class="gpick" id="genrePick">
+        <button type="button" class="gpickbtn" id="genrePickBtn" aria-expanded="false">All genres</button>
+        <div class="gpickpanel is-hidden" id="genrePickPanel"></div>
+      </div>
+      <select id="browseSort" aria-label="Sort">
+        <option value="depleted">Most depleted</option>
+        <option value="title">A–Z</option>
+        <option value="fits">Most gaps it fits</option>
+        <option value="ending">Ending soon</option>
+        <option value="time">Showtime</option>
+      </select>
+    </div>
+  </div>
+  <div id="browseList" class="cards"></div>
+  <div id="browseMore" class="morewrap is-hidden"><button class="btn ghost" id="browseMoreBtn">Show more</button></div>
+</section>
+
+<!-- --------------------------------------------------------- ACTIVITY -->
+<section id="view-activity" class="view is-hidden">
+  <div class="explain">
+    <b>What moved since the last check.</b> Tickets coming back on sold-out
+    dates, shows crossing 50/75/90%, sold out, and newly added dates.
+  </div>
+  <div id="actSummary" class="actsum"></div>
+  <!-- ⚠️ "Today" read as "changes about today's shows". It never meant that:
+       it is how far back the SCAN history goes. Labelled in hours and days so
+       the question cannot come up again. -->
+  <div class="rowlab">Changed in the last</div>
+  <div class="filters scrollrow" id="actWhen">
+    <button class="chip is-on" data-when="1">24 hours</button>
+    <button class="chip" data-when="3">3 days</button>
+    <button class="chip" data-when="7">Week</button>
+    <button class="chip" data-when="99">All time</button>
+  </div>
+  <div class="rowlab">Show me</div>
+  <div class="filters scrollrow" id="actWhat">
+    <button class="chip" data-what="fav">My faves</button>
+    <button class="chip is-on" data-what="all">Everything</button>
+    <button class="chip" data-what="availableAgain">Tickets back</button>
+    <button class="chip" data-what="threshold">Selling out</button>
+    <button class="chip" data-what="newDates">New dates</button>
+  </div>
+  <div class="sortrow">
+    <span id="actCount" class="sortcount"></span>
+    <div class="sortctl">
+      <div class="gpick" data-gpick="act">
+        <button type="button" class="gpickbtn" aria-expanded="false">All genres</button>
+        <div class="gpickpanel is-hidden"></div>
+      </div>
+      <select id="actSort" aria-label="Sort">
+        <option value="recent">Most recent</option>
+        <option value="title">A–Z</option>
+        <option value="depleted">Most depleted</option>
+        <option value="ending">Ending soon</option>
+        <option value="time">Showtime</option>
+      </select>
+    </div>
+  </div>
+  <div id="actList" class="cards"></div>
+
+  <!-- ⚠️ The shell is served cache-first, so a deploy can be invisible on an
+       installed PWA until the service worker turns over - and GitHub Pages
+       holds sw.js for 10 minutes, which once cost a "I refreshed and it looks
+       the same" round trip. This is the manual escape hatch, the same control
+       the ACL tracker has. It lives here, at the bottom of Activity, because
+       this is the app-level tab; it never appears or disappears. -->
+  <div class="appup">
+    <button class="btn ghost" id="forceUpdate">Force update the app</button>
+    <button class="btn ghost" id="cloudToken">Cloud refresh</button>
+    <span class="appup-status" id="forceUpdateStatus"></span>
+    <p class="explain">
+      Re-downloads the app's files and reloads. <b>Nothing of yours is touched</b> —
+      your holds, favourites and GitHub token are stored separately from the app's
+      own files. Use this if a change you expected has not appeared; you never
+      need to re-add the Home Screen icon.
+    </p>
+    <div class="appbuild" id="appBuild"></div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------ SHEET -->
+<div id="sheet" class="sheet is-hidden" role="dialog" aria-modal="true">
+  <div class="sheet-scrim" data-close></div>
+  <div class="sheet-panel">
+    <!-- ⚠️ Zero-height wrapper: the button used to FLOAT, and .sheethead is a
+         flex container, so it established a BFC and shrank by the float's full
+         width - 34px stolen from every row of the header, not just the line the
+         button sits on. Out of flow now, and still sticky so it stays reachable
+         in a long sheet. -->
+    <div class="sheet-closewrap">
+      <button class="sheet-close" data-close aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div id="sheetBody"></div>
+  </div>
+</div>
+
+<!-- ------------------------------------------------------------ TICKET
+     ⚠️ A SEPARATE overlay from #sheet, on purpose. This one is white in both
+     themes, covers the whole screen and holds no chrome but its close button:
+     everything on it exists to be read by someone else's scanner at a door.
+     Above the sheet in z-order, because it is opened FROM the sheet. -->
+<div id="ticket" class="ticket is-hidden" role="dialog" aria-modal="true" aria-label="Your ticket">
+  <button class="ticket-close" data-tclose aria-label="Close ticket">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+  </button>
+  <div id="ticketBody"></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
